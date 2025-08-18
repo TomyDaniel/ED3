@@ -154,6 +154,124 @@ Antes de que el microcontrolador pueda ejecutar una sola instrucción o mover un
 2.  **Funcionamiento de Periféricos:** Cada periférico (UART, Timers, ADC, etc.) necesita una señal de reloj para funcionar. La frecuencia de este reloj determina sus velocidades de operación.
 3.  **Gestión de Energía:** Una de las tareas más importantes es **habilitar el reloj solo para los periféricos que vamos a usar**. Si no usas el ADC, apagas su reloj. Esto reduce drásticamente el consumo de energía del chip.
 
+### Programación del timer SysTick
+
+El SysTick es un temporizador estándar de 24 bits integrado en el núcleo de todos los procesadores ARM Cortex-M, incluido el del LPC1769. Es la herramienta preferida para crear retardos sencillos y para servir como base de tiempo ("tick") en Sistemas Operativos de Tiempo Real (RTOS).
+
+*¿Por Qué Usar SysTick?*
+
+- **Simplicidad**: Se configura con solo 3 registros. No requiere habilitar clocks en PCONP como los periféricos de NXP.
+- **Portabilidad**: El código que usa SysTick es directamente portable a cualquier otro microcontrolador con núcleo Cortex-M.
+- **Eficiencia**: Está diseñado para ser una base de tiempo de baja sobrecarga para el sistema.
+
+#### SysTick vs. Timers Periféricos (Timer0, Timer1...)
+
+| Característica | SysTick (Recomendado para Delays) | Timers Periféricos (Timer0, etc.) |
+| :--- | :--- | :--- |
+| **Uso Ideal** | Delays sencillos, base de tiempo para RTOS. | Tareas complejas: PWM, medir pulsos, etc. |
+| **Complejidad** | Muy baja. | Media. Requiere configuración de `PCONP`. |
+| **Portabilidad** | Alta (Estándar de ARM). | Nula (Específico de NXP). |
+| **Cantidad** | Solo hay uno. | Hay varios disponibles (Timer0, 1, 2, 3). |
+
+---
+
+#### Los 3 Registros Clave del SysTick
+
+Todo el control se realiza a través de 3 registros accesibles directamente.
+
+| Registro | Nombre Completo | Propósito Principal |
+| :--- | :--- | :--- |
+| `SysTick->CTRL` | Control and Status Register | **El interruptor principal.** Habilita/deshabilita el timer, selecciona la fuente de reloj y contiene la bandera que indica que el tiempo ha finalizado. |
+| `SysTick->LOAD` | Reload Value Register | **El valor de cuenta.** Aquí se carga el número de "ticks" que queremos que el contador espere. Es un contador descendente, así que cuenta desde este valor hasta cero. |
+| `SysTick->VAL` | Current Value Register | **El contador actual.** Muestra el valor actual del conteo. Escribir cualquier valor en él lo resetea a 0 de inmediato. |
+
+---
+
+#### Flujo de Programación para un Retardo (Polling)
+
+Para crear una función de retardo `delay`, el proceso siempre sigue estos 5 pasos:
+
+##### Paso 1: Calcular los Ticks Necesarios
+Determina cuántos ciclos de reloj del CPU se necesitan para el retardo deseado. La variable global `SystemCoreClock` (definida en los archivos de sistema de NXP) contiene la frecuencia del CPU en Hz.
+
+*   **Ticks por segundo** = `SystemCoreClock`
+*   **Ticks por milisegundo** = `SystemCoreClock / 1000`
+*   **Ticks por microsegundo** = `SystemCoreClock / 1000000`
+
+##### Paso 2: Cargar el Valor de Recarga (`LOAD`)
+Carga el número de ticks calculados (menos 1, ya que la cuenta incluye el 0) en el registro `LOAD`. El valor máximo es de 24 bits (`0x00FFFFFF`).
+
+```c
+// Para un retardo de 'N' ticks
+SysTick->LOAD = N - 1;
+```
+
+##### Paso 3: Resetear el Contador (VAL)
+Para asegurar que la cuenta empiece desde el valor cargado, se debe limpiar el contador actual escribiendo cualquier valor en VAL.
+
+```c
+SysTick->VAL = 0;
+```
+
+##### Paso 4: Habilitar el Timer (CTRL)
+Configura y enciende el SysTick escribiendo en el registro `CTRL`. La configuración típica es:
+- Bit 0 (`ENABLE`) = 1: Habilita el contador.
+- Bit 2 (`CLKSOURCE`) = 1: Usa el reloj del procesador como fuente.
+
+```c
+// Habilitar SysTick con el reloj del CPU
+SysTick->CTRL = (1 << 0) | (1 << 2);
+```
+
+##### Paso 5: Esperar la Bandera (COUNTFLAG)
+Monitorea el bit 16 (COUNTFLAG) del registro CTRL. Este bit se pondrá en 1 automáticamente cuando el contador llegue a cero. El bucle se detiene cuando esto sucede.
+
+```c
+// Esperar en un bucle hasta que la bandera se levante
+while (!(SysTick->CTRL & (1 << 16)));
+```
+
+**Nota:** Una vez que la bandera se lee, se limpia automáticamente por hardware.
+
+##### Paso 6 (Opcional): Detener el Timer
+Para ahorrar energía, deshabilita el SysTick una vez que el retardo ha finalizado.
+
+```c
+SysTick->CTRL = 0;
+```
+
+##### Código de ejemplo:
+
+```c
+/**
+ * @brief Genera un retardo en milisegundos usando el SysTick.
+ * @param milisegundos: Tiempo de espera en ms.
+ */
+void delay_ms_systick(uint32_t milisegundos) {
+    // 1. Calcular los ticks necesarios.
+    // (SystemCoreClock / 1000) nos da los ticks por milisegundo.
+    uint32_t ticks = (SystemCoreClock / 1000) * milisegundos;
+
+    // 2. Cargar el valor de recarga (N-1). El máximo es 0xFFFFFF.
+    SysTick->LOAD = ticks - 1;
+
+    // 3. Resetear el contador actual.
+    SysTick->VAL = 0;
+
+    // 4. Habilitar el SysTick (usando el reloj del CPU).
+    // Bit 2: CLKSOURCE=1 (CPU clock), Bit 0: ENABLE=1 (Habilitar)
+    SysTick->CTRL = (1 << 2) | (1 << 0);
+
+    // 5. Esperar hasta que la bandera COUNTFLAG (bit 16) se ponga en 1.
+    while (!(SysTick->CTRL & (1 << 16)));
+
+    // 6. Deshabilitar el SysTick.
+    SysTick->CTRL = 0;
+}
+```
+
+--- 
+
 ### El Sistema de Clocks del LPC1769
 
 El proceso para generar el clock principal del sistema sigue una cadena:
