@@ -144,34 +144,45 @@ if (LPC_GPIO2->FIOPIN & (1 << 10)) {
 
 ---
 
-## Introducción a la Gestión de Clocks
+## Manejando el Tiempo: Clocks y el Timer SysTick
 
-Antes de que el microcontrolador pueda ejecutar una sola instrucción o mover un solo bit en un pin GPIO, su sistema de reloj debe estar configurado. El clock del microcontrolador; sincroniza todas las operaciones internas.
+### 1. El Corazón del Sistema: La Gestión de Clocks 
 
-### ¿Por Qué son Importantes los Clocks?
+Antes de hacer cualquier cosa, el microcontrolador necesita un "latido". Este latido es la señal de reloj, que sincroniza todas las operaciones.
 
-1.  **Velocidad de Ejecución:** La frecuencia del clock principal determina cuántas instrucciones por segundo puede ejecutar la CPU. Un clock más rápido significa un programa más rápido.
-2.  **Funcionamiento de Periféricos:** Cada periférico (UART, Timers, ADC, etc.) necesita una señal de reloj para funcionar. La frecuencia de este reloj determina sus velocidades de operación.
-3.  **Gestión de Energía:** Una de las tareas más importantes es **habilitar el reloj solo para los periféricos que vamos a usar**. Si no usas el ADC, apagas su reloj. Esto reduce drásticamente el consumo de energía del chip.
+#### ¿Por Qué es Tan Importante?
 
-### Programación del timer SysTick
+1.  **Velocidad de Ejecución:** La frecuencia del clock determina qué tan rápido "piensa" la CPU. Más MHz = programa más rápido.
+2.  **Funcionamiento de Periféricos:** Cada componente necesita su propia señal de reloj para funcionar.
+3.  **Gestión de Energía:** Apagar el reloj de los periféricos que no usas es la forma más eficaz de ahorrar batería.
 
-El SysTick es un temporizador estándar de 24 bits integrado en el núcleo de todos los procesadores ARM Cortex-M, incluido el del LPC1769. Es la herramienta preferida para crear retardos sencillos y para servir como base de tiempo ("tick") en Sistemas Operativos de Tiempo Real (RTOS).
+> **Idea Central:** La configuración del clock es el **Paso Cero** de cualquier proyecto. Define la velocidad de todo el sistema, y esa velocidad es la que usaremos como referencia para crear retardos precisos con el SysTick.
 
-*¿Por Qué Usar SysTick?*
+---
 
-- **Simplicidad**: Se configura con solo 3 registros. No requiere habilitar clocks en PCONP como los periféricos de NXP.
-- **Portabilidad**: El código que usa SysTick es directamente portable a cualquier otro microcontrolador con núcleo Cortex-M.
-- **Eficiencia**: Está diseñado para ser una base de tiempo de baja sobrecarga para el sistema.
+### 2. La Herramienta de Precisión: El Timer SysTick 
 
-#### SysTick vs. Timers Periféricos (Timer0, Timer1...)
+Una vez que nuestro sistema tiene un "latido" estable, necesitamos una forma de contar esos latidos para medir el tiempo. La herramienta más simple y eficiente para esto es el **SysTick**.
 
-| Característica | SysTick (Recomendado para Delays) | Timers Periféricos (Timer0, etc.) |
+#### La Clave: ¿Es del Núcleo (ARM) o del Fabricante (NXP)?
+
+Esta es la distinción más importante que debes entender:
+
+*    **El Núcleo (ARM):** La empresa ARM diseña el "cerebro" del microcontrolador. Esto es estándar para todos los chips Cortex-M.
+*    **Los Periféricos (NXP):** Empresas como NXP toman ese "cerebro" y le añaden "brazos y piernas" (GPIO, Timers 0/1/2, UARTs, ADC). Estos son específicos de cada fabricante.
+
+Por eso el SysTick es tan especial:
+*   **Simplicidad:** Al ser parte del núcleo, no necesita configuraciones complejas de reloj en registros de NXP como `PCONP`. Ya está "conectado" directamente al procesador.
+*   **Portabilidad:** El mismo código para el SysTick funcionará en un microcontrolador de ST, Texas Instruments o cualquier otro que use un núcleo Cortex-M.
+
+#### SysTick vs. Timers Periféricos (Timer0, etc.)
+
+| Característica | SysTick  | Timers Periféricos  |
 | :--- | :--- | :--- |
-| **Uso Ideal** | Delays sencillos, base de tiempo para RTOS. | Tareas complejas: PWM, medir pulsos, etc. |
-| **Complejidad** | Muy baja. | Media. Requiere configuración de `PCONP`. |
-| **Portabilidad** | Alta (Estándar de ARM). | Nula (Específico de NXP). |
-| **Cantidad** | Solo hay uno. | Hay varios disponibles (Timer0, 1, 2, 3). |
+| **Uso Ideal** | Delays sencillos, base de tiempo para RTOS. | Tareas complejas: Generar PWM, medir pulsos, etc. |
+| **Complejidad** | **Muy baja.** Acceso directo. | **Media.** Requiere habilitar su clock en `PCONP`. |
+| **Portabilidad** | **Alta** (Estándar de ARM). | **Nula** (Específico de NXP). |
+| **Cantidad** | Solo hay **uno**. | Hay **varios** disponibles (Timer0, 1, 2, 3). |
 
 ---
 
@@ -187,7 +198,7 @@ Todo el control se realiza a través de 3 registros accesibles directamente.
 
 ---
 
-#### Flujo de Programación para un Retardo (Polling)
+#### Flujo de Programación para un Retardo
 
 Para crear una función de retardo `delay`, el proceso siempre sigue estos 5 pasos:
 
@@ -269,149 +280,3 @@ void delay_ms_systick(uint32_t milisegundos) {
     SysTick->CTRL = 0;
 }
 ```
-
---- 
-
-### El Sistema de Clocks del LPC1769
-
-El proceso para generar el clock principal del sistema sigue una cadena:
-
-`Fuente de Reloj` -> `PLL0 (Multiplicador)` -> `Divisor de CPU` -> `Reloj final (CCLK)`
-
-1.  **Fuente de Reloj:** El "marcapasos" inicial. Puede ser:
-    *   **Oscilador RC Interno (IRC):** Viene dentro del chip (~4 MHz). Es impreciso pero funciona sin componentes externos.
-    *   **Oscilador Principal (Externo):** Se conecta un cristal de cuarzo externo (típicamente de 12 MHz). Es muy preciso y es la opción recomendada.
-
-2.  **PLL:** Es un circuito que toma una frecuencia de entrada baja y la multiplica para generar una frecuencia muy alta. Esto permite que el núcleo del procesador funcione a velocidades elevadas como 100 MHz.
-
-3.  **Divisor de CPU (CCLKSEL):** Toma la salida del PLL y la divide para obtener la frecuencia final del procesador.
-
-### Pasos Prácticos para Configurar los Clocks
-
-La configuración de los relojes se realiza manipulando registros dentro del **System Control Block** (`LPC_SC`).
-
-#### Paso 0: Habilitar el Clock del Periférico que Vas a Usar (`PCONP`)
-
-Esta es la regla de oro: **antes de configurar o usar CUALQUIER periférico, debes darle energía habilitando su reloj.** Esto se hace en el registro `PCONP`.
-
-Por defecto, tras un reset, solo el clock para GPIO está habilitado.
-
-```c
-// Para poder usar los registros PINSEL (parte del bloque PINCONNECT)
-// debemos habilitar su reloj. PCPIN es el bit 15.
-LPC_SC->PCONP |= (1 << 15);
-
-// Habilitar el reloj para el periférico GPIO (ya está por defecto, pero es bueno saberlo)
-// PCGPIO es el bit 15, pero ¡ojo!, el bloque PINCONNECT y GPIO son cosas distintas
-// aunque a menudo se usan juntos. ¡El manual de usuario es clave aquí!
-// Para GPIO, no se necesita PCONP, pero sí para los otros periféricos como UART, Timers, etc.
-
-// Ejemplo: Habilitar reloj para el Timer0 (bit 1) y UART0 (bit 3)
-LPC_SC->PCONP |= (1 << 1) | (1 << 3);
-```
-
-**¡Importante!** Un error muy común es intentar escribir en un registro de un periférico (ej: LPC_UART0->LCR) sin haber habilitado su clock en PCONP primero. La escritura simplemente no tendrá efecto.
-
-### Configuración del Clock Principal
-
-1. Seleccionar la fuente de reloj:
-
-```c
-// Selecciona el Oscilador Principal (cristal externo) como fuente para el PLL0
-LPC_SC->CLKSRCSEL = (1 << 0);
-```
-
-2. Configurar el PLL0 para multiplicar la frecuencia:
-La meta es llegar a un CCLK de 100 MHz desde un cristal de 12 MHz.
-
-- Se usan un multiplicador (M) y un divisor (N).
-- Se calcula una frecuencia intermedia F_CCO = (2 * M * F_in) / N. F_CCO debe estar entre 275 y 550 MHz.
-- Para 100 MHz, una configuración común es: M=50, N=3.
-- F_CCO = (2 * 50 * 12 MHz) / 3 = 400 MHz.
-
-```c
-// Configurar multiplicador y divisor (M-1 y N-1)
-// M = 50 -> M-1 = 49. N = 3 -> N-1 = 2
-LPC_SC->PLL0CFG = (49 << 0) | (2 << 16); 
-LPC_SC->PLL0CON = (1 << 0); // Habilitar PLL0
-LPC_SC->PLL0FEED = 0xAA;    // Secuencia de alimentación obligatoria
-LPC_SC->PLL0FEED = 0x55;
-
-// Esperar a que el PLL se "enganche" (se estabilice)
-while (!(LPC_SC->PLL0STAT & (1 << 26)));
-
-LPC_SC->PLL0CON = (1 << 0) | (1 << 1); // Conectar PLL0 como fuente de reloj
-LPC_SC->PLL0FEED = 0xAA;
-LPC_SC->PLL0FEED = 0x55;
-```
-
-3. Configurar el divisor de la CPU para obtener 100 MHz:
-
-Tenemos F_CCO a 400 MHz. Queremos CCLK a 100 MHz. Necesitamos dividir por 4.
-
-- El divisor es el valor del registro + 1. Para dividir por 4, escribimos un 3.
-
-```c
-// CCLKCFG = 3, significa que el divisor es 4
-LPC_SC->CCLKCFG = 3;
-```
-
-**Resumen del Flujo de Clocks**
-
-Siempre que se use un nuevo periférico, primero ve al registro PCONP y enciende su bit correspondiente.
-La configuración del reloj principal es compleja, pero generalmente se hace una sola vez al inicio del sistema y no se vuelve a tocar. Es bueno entenderla para saber a qué velocidad está corriendo tu microcontrolador.
-
----
-
-## Programación de Timers (Para Delays Precisos)
-
-Aunque un bucle `for` puede crear un retardo, es una mala práctica porque es **bloqueante** e **impreciso**. La forma profesional de manejar el tiempo es usando un periférico de hardware: el **Timer**.
-
-### ¿Cómo Funciona un Timer?
-
-Imagina un contador de números que avanza a un ritmo perfectamente constante. Nosotros podemos:
-1.  Establecer la **velocidad** a la que cuenta.
-2.  Decirle que nos **avise** cuando llegue a un número específico.
-3.  Iniciar, detener y resetear el conteo.
-
-### Registros Clave del Timer0
-
-| Registro         | Propósito                                                                                                | Ejemplo de Uso                                     |
-| ---------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| `LPC_TIM0->TCR`  | **Timer Control Register:** El interruptor principal. Habilita (`1`), deshabilita (`0`) y resetea el contador. | `LPC_TIM0->TCR = (1 << 0);` // Habilita el timer |
-| `LPC_TIM0->PR`   | **Prescale Register:** Define la velocidad del contador. `Velocidad = PCLK / (PR + 1)`.                     | `LPC_TIM0->PR = 24;` // Hace que cuente cada 1us si PCLK=25MHz |
-| `LPC_TIM0->MR0`  | **Match Register 0:** El número objetivo. Cuando el contador `TC` llega a este valor, ocurre un "match".     | `LPC_TIM0->MR0 = 1000;` // El objetivo es 1000 |
-| `LPC_TIM0->MCR`  | **Match Control Register:** ¿Qué hacer en un "match"? ¿Generar una bandera? ¿Detener el timer? ¿Resetear? | `LPC_TIM0->MCR = 3;` // Genera bandera y resetea en match |
-| `LPC_TIM0->IR`   | **Interrupt Register:** Contiene las "banderas" que se levantan cuando ocurre un evento (como un match).  | `while (!(LPC_TIM0->IR & 1));` // Espera a la bandera |
-
-### Ejemplo: Función `delay_ms` con Timer0
-
-Esta función implementa un retardo preciso esperando a que el timer complete su cuenta.
-
-```c
-/**
- * @brief Genera un retardo preciso usando el Timer0.
- * @param milisegundos: Cantidad de milisegundos a esperar.
- * @note Asume que el Timer0 ya ha sido configurado con un Prescaler
- *       para contar en microsegundos (PR=24 para PCLK=25MHz).
- */
-void delay_ms(uint32_t milisegundos){
-    // 1. Cargar el valor final en el Match Register.
-    // Si el timer cuenta en us, para ms multiplicamos por 1000.
-    LPC_TIM0->MR0 = milisegundos * 1000;
-
-    // 2. Configurar el MCR para que en el match:
-    //    - Genere una bandera de interrupción (bit 0).
-    //    - Detenga el timer (bit 2).
-    LPC_TIM0->MCR = (1 << 0) | (1 << 2);
-    
-    // 3. Resetear y habilitar el timer.
-    LPC_TIM0->TCR = (1 << 1); // Reset
-    LPC_TIM0->TCR = (1 << 0); // Habilitar
-
-    // 4. Esperar (polling) hasta que se levante la bandera de match en MR0.
-    while (!(LPC_TIM0->IR & (1 << 0)));
-
-    // 5. Limpiar la bandera para el próximo uso.
-    LPC_TIM0->IR |= (1 << 0);
-}
