@@ -242,3 +242,58 @@ LPC_SC->CCLKCFG = 3;
 
 Siempre que se use un nuevo periférico, primero ve al registro PCONP y enciende su bit correspondiente.
 La configuración del reloj principal es compleja, pero generalmente se hace una sola vez al inicio del sistema y no se vuelve a tocar. Es bueno entenderla para saber a qué velocidad está corriendo tu microcontrolador.
+
+---
+
+## Programación de Timers (Para Delays Precisos)
+
+Aunque un bucle `for` puede crear un retardo, es una mala práctica porque es **bloqueante** e **impreciso**. La forma profesional de manejar el tiempo es usando un periférico de hardware: el **Timer**.
+
+### ¿Cómo Funciona un Timer?
+
+Imagina un contador de números que avanza a un ritmo perfectamente constante. Nosotros podemos:
+1.  Establecer la **velocidad** a la que cuenta.
+2.  Decirle que nos **avise** cuando llegue a un número específico.
+3.  Iniciar, detener y resetear el conteo.
+
+### Registros Clave del Timer0
+
+| Registro         | Propósito                                                                                                | Ejemplo de Uso                                     |
+| ---------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `LPC_TIM0->TCR`  | **Timer Control Register:** El interruptor principal. Habilita (`1`), deshabilita (`0`) y resetea el contador. | `LPC_TIM0->TCR = (1 << 0);` // Habilita el timer |
+| `LPC_TIM0->PR`   | **Prescale Register:** Define la velocidad del contador. `Velocidad = PCLK / (PR + 1)`.                     | `LPC_TIM0->PR = 24;` // Hace que cuente cada 1us si PCLK=25MHz |
+| `LPC_TIM0->MR0`  | **Match Register 0:** El número objetivo. Cuando el contador `TC` llega a este valor, ocurre un "match".     | `LPC_TIM0->MR0 = 1000;` // El objetivo es 1000 |
+| `LPC_TIM0->MCR`  | **Match Control Register:** ¿Qué hacer en un "match"? ¿Generar una bandera? ¿Detener el timer? ¿Resetear? | `LPC_TIM0->MCR = 3;` // Genera bandera y resetea en match |
+| `LPC_TIM0->IR`   | **Interrupt Register:** Contiene las "banderas" que se levantan cuando ocurre un evento (como un match).  | `while (!(LPC_TIM0->IR & 1));` // Espera a la bandera |
+
+### Ejemplo: Función `delay_ms` con Timer0
+
+Esta función implementa un retardo preciso esperando a que el timer complete su cuenta.
+
+```c
+/**
+ * @brief Genera un retardo preciso usando el Timer0.
+ * @param milisegundos: Cantidad de milisegundos a esperar.
+ * @note Asume que el Timer0 ya ha sido configurado con un Prescaler
+ *       para contar en microsegundos (PR=24 para PCLK=25MHz).
+ */
+void delay_ms(uint32_t milisegundos){
+    // 1. Cargar el valor final en el Match Register.
+    // Si el timer cuenta en us, para ms multiplicamos por 1000.
+    LPC_TIM0->MR0 = milisegundos * 1000;
+
+    // 2. Configurar el MCR para que en el match:
+    //    - Genere una bandera de interrupción (bit 0).
+    //    - Detenga el timer (bit 2).
+    LPC_TIM0->MCR = (1 << 0) | (1 << 2);
+    
+    // 3. Resetear y habilitar el timer.
+    LPC_TIM0->TCR = (1 << 1); // Reset
+    LPC_TIM0->TCR = (1 << 0); // Habilitar
+
+    // 4. Esperar (polling) hasta que se levante la bandera de match en MR0.
+    while (!(LPC_TIM0->IR & (1 << 0)));
+
+    // 5. Limpiar la bandera para el próximo uso.
+    LPC_TIM0->IR |= (1 << 0);
+}
