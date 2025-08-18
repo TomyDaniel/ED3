@@ -21,12 +21,17 @@
 
 #### Configurar la dirección:
 
-- Si se utiliza GPIO indicar si es salida o entrada, el "0" se utiliza para decir es mi entrada y el "1" para decir es mi salida.
-    ```
-    LPC_GPIO0->FIODIR |= (0 << 5) **Entrada**
+- Si se utiliza GPIO, indicar si es salida o entrada.
+    - **Salida (Output):** El bit correspondiente debe ser `1`.
+    - **Entrada (Input):** El bit correspondiente debe ser `0`.
 
-    LPC_GPIO0->FIODIR |= (1 << 5) **Salida**
-    ```
+```c
+// Configura el pin 5 como SALIDA (enciende el bit 5)
+LPC_GPIO0->FIODIR |= (1 << 5);
+
+// Configura el pin 5 como ENTRADA (apaga el bit 5)
+LPC_GPIO0->FIODIR &= ~(1 << 5);
+```
 
 ### Operar el PIN:
 
