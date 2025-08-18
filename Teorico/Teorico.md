@@ -42,7 +42,7 @@ LPC_GPIO0->FIODIR &= ~(1 << 5);
     FIOPIN
     ```
 
-La LPC 1769 posee 4 puertos, cada puerto tiene 15 pines y son controlados por 32 bits de la siguiente manera:
+La LPC 1769 posee 5 puertos, cada puerto tiene 15 pines y son controlados por 32 bits de la siguiente manera:
 
 - **Puerto 0**:
     - PINSEL 0: Va desde 0 a 15 bits
@@ -76,19 +76,34 @@ Ademas sabemos que nuestra ecuación general es:
 
 $$ P_{x} \cdot _{y} $$
 
-Con la siguiente representación:
+### Cómo Calcular la Posición de Bits en `PINSEL`
 
-- La **x** representa el *puerto*
+Para cualquier pin **P<sub>x.y</sub>**, sigue estos pasos para encontrar los bits que lo controlan:
 
-- La **y** representa el *pin*
+#### **1. Si el pin `y` está en la Mitad Inferior (0 a 15):**
 
-Sabiendo esto y para facilitar el calculo de los bits, disponemos de las siguientes formulas:
+-   **Fórmula:**
+    $bit_{inicio} = 2 \cdot y$
+-   **Ejemplo para P2.10 (`y=10`):**
+    $bit_{inicio} = 2 \cdot 10 = 20$.
+    *Los bits a controlar son el **20** y el **21**.*
+-   **Código de ejemplo para limpiar los bits:**
+    ```c
+    // Limpia los bits 20 y 21
+    LPC_PINCON->PINSEL4 &= ~(3 << 20);
+    ```
 
-- Mitad inferior:
+#### **2. Si el pin `y` está en la Mitad Superior (16 a 31):**
 
-$ (2 \cdot y) $     y      $(2 \cdot y + 1)$
+-   **Fórmula:**
+    $bit_{inicio} = (y - 16) \cdot 2$
+-   **Ejemplo para P0.22 (`y=22`):**
+    $bit_{inicio} = (22 - 16) \cdot 2 = 6 \cdot 2 = 12$.
+    *Los bits a controlar son el **12** y el **13**.*
+-   **Código de ejemplo para limpiar los bits:**
+    ```c
+    // Limpia los bits 12 y 13
+    LPC_PINCON->PINSEL1 &= ~(3 << 12);
+    ```
 
-- Mitad superior:
-
-$ [(y - 16) \cdot 2] $     y      $ [(y - 16) \cdot 2 + 1] $
 
