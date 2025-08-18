@@ -1,109 +1,142 @@
-# Electronica Digital 3
+# Electrónica Digital 3
 
-## LPC 1769
+## Guía de Programación GPIO para LPC1769
 
-### Programación GPIO
+### Principios Básicos
 
-- Hardware mapeado en memorias: Escribo y leo en direcciones de memoria especificas que estan conectadas a los perifericos.
+La interacción con los periféricos en el LPC1769 se realiza a través de **registros mapeados en memoria**. Esto significa que para controlar un pin, simplemente leemos o escribimos valores en direcciones de memoria específicas que el hardware interpreta como comandos.
 
-- Configurar vs. operar: Primero se configura el hardware y luego se opera mediante un bucle
+El flujo de trabajo siempre sigue dos fases:
 
-**¿Que debo hacer primero?**
+1.  **Configuración:** Se realiza una sola vez al inicio del programa. Aquí se define el comportamiento del hardware.
+2.  **Operación:** Se realiza continuamente dentro de un bucle principal. Aquí se ejecutan las acciones.
 
-#### Configurar la función:
+### El Proceso de 3 Pasos para Controlar un Pin GPIO
 
-- Primero le digo al PIN que hacer (GPIO, UART, ADC, ...)    *(Para LED´s y botones siempre utilizo GPIO)*
-    ```
-    **LPC_PINCON->PINSELx**
+Para controlar cualquier pin como Entrada/Salida de Propósito General (GPIO), se deben seguir estos tres pasos en orden:
 
-    (La x depende del puerto y los bits seleccionados)
-    ```
+1.  **Paso 1: Configurar la Función del Pin**
+    -   Registro: `LPC_PINCON->PINSELx`
+    -   Propósito: Decirle al pin si será GPIO, ADC, UART, etc.
+2.  **Paso 2: Configurar la Dirección del Pin**
+    -   Registro: `LPC_GPIOx->FIODIR`
+    -   Propósito: Si es GPIO, especificar si será Entrada o Salida.
+3.  **Paso 3: Operar el Pin**
+    -   Registros: `FIOSET`, `FIOCLR`, `FIOPIN`
+    -   Propósito: Escribir un estado si es salida, o leer el estado si es entrada.
 
-#### Configurar la dirección:
+---
 
-- Si se utiliza GPIO, indicar si es salida o entrada.
-    - **Salida (Output):** El bit correspondiente debe ser `1`.
-    - **Entrada (Input):** El bit correspondiente debe ser `0`.
+### Paso 1: Configurar la Función del Pin (`PINSEL`)
+
+Cada pin del microcontrolador puede tener hasta 4 funciones distintas. Debemos seleccionar cuál queremos usar. Para LEDs y botones, siempre usaremos la función **GPIO**.
+
+La función de cada pin se configura mediante 2 bits en los registros `PINSEL`.
+
+-   `00`: Función principal (generalmente **GPIO**).
+-   `01`: Primera función alternativa.
+-   `10`: Segunda función alternativa.
+-   `11`: Tercera función alternativa.
+
+> **Importante:** Para usar un pin como GPIO, debemos asegurarnos de que sus 2 bits correspondientes en `PINSEL` estén en `00`. La forma más segura de hacerlo es "limpiando" esos bits.
+
+#### ¿Qué registro `PINSEL` debo usar?
+
+El LPC1769 agrupa los registros `PINSEL` de la siguiente manera: cada registro controla 16 pines (32 bits, 2 por pin).
+
+| Puerto | Pines 0-15  | Pines 16-31  |
+| :----: | :-------------------------: | :--------------------------: |
+|  **P0**  |         `PINSEL0`         |          `PINSEL1`           |
+|  **P1**  |         `PINSEL2`         |          `PINSEL3`           |
+|  **P2**  |         `PINSEL4`         |          `PINSEL5`           |
+|  **P3**  |         `PINSEL6`         |          `PINSEL7`           |
+|  **P4**  |         `PINSEL8`         |          `PINSEL9`           |
+
+#### ¿Cómo Calcular la Posición de los Bits?
+
+Para un pin `Px.y`, donde `x` es el puerto y `y` es el número de pin:
+
+1.  **Si `y` está entre 0 y 15:**
+    -   El registro es `PINSEL` par.
+    -   **Fórmula:** `posicion_bit_inicio = y * 2`
+    -   *Ejemplo para `P2.10` (`y=10`):*
+        -   Registro: `PINSEL4`
+        -   Posición: `10 * 2 = 20`. Se deben modificar los bits **20** y **21**.
+
+2.  **Si `y` está entre 16 y 31:**
+    -   El registro es `PINSEL` impar.
+    -   **Fórmula:** `posicion_bit_inicio = (y - 16) * 2`
+    -   *Ejemplo para `P0.22` (`y=22`):*
+        -   Registro: `PINSEL1`
+        -   Posición: `(22 - 16) * 2 = 12`. Se deben modificar los bits **12** y **13**.
+
+**Código para limpiar los bits:**
 
 ```c
-// Configura el pin 5 como SALIDA (enciende el bit 5)
-LPC_GPIO0->FIODIR |= (1 << 5);
+// Para P2.10: Limpia los bits 20 y 21 de PINSEL4
+// El 3 en binario es 11. (3 << 20) crea una máscara ...001100...
+// ~(3 << 20) la invierte a ...110011... para limpiar solo esos bits.
+LPC_PINCON->PINSEL4 &= ~(3 << 20);
 
-// Configura el pin 5 como ENTRADA (apaga el bit 5)
-LPC_GPIO0->FIODIR &= ~(1 << 5);
+// Para P0.22: Limpia los bits 12 y 13 de PINSEL1
+LPC_PINCON->PINSEL1 &= ~(3 << 12);
 ```
 
-### Operar el PIN:
+---
 
-- Comandos para setar, limpir y saber que esta haciendo el PIN (estado):
-    ```
-    FIOSET
-    FIOCLR
-    FIOPIN
-    ```
+### Paso 2: Configurar la Dirección del Pin (`FIODIR`)
 
-La LPC 1769 posee 5 puertos, cada puerto tiene 15 pines y son controlados por 32 bits de la siguiente manera:
+Una vez que el pin está configurado como GPIO, le decimos si será una entrada o una salida a través del registro `FIODIR` de su puerto correspondiente.
 
-- **Puerto 0**:
-    - PINSEL 0: Va desde 0 a 15 bits
-    - PINSEL 1: Va desde 16 a 31 bits
+- **Salida (Output)**: El bit correspondiente al pin debe ser 1.
+- **Entrada (Input)**: El bit correspondiente al pin debe ser 0.
 
-Esto se "repite" hasta el puerto 4:
+**Ejemplos de código:**
 
-- **Puerto 4**:
-    - PINSEL 8: Va desde 0 a 15 bits
-    - PINSEL 9: Va desde 16 a 31 bits
+```c
+// Configura el pin P0.22 como SALIDA (enciende el bit 22 en FIODIR del puerto 0)
+LPC_GPIO0->FIODIR |= (1 << 22);
 
-La distribución de los bits dentro de un PINSEL es:
+// Configura el pin P2.10 como ENTRADA (apaga el bit 10 en FIODIR del puerto 2)
+LPC_GPIO2->FIODIR &= ~(1 << 10);
+```
 
-*bits* 0 y 1 ----> Pin 0 del puerto
+**Nota sobre operadores:**
 
-*bits* 2 y 3 ----> Pin 1 del puerto
+- Usamos |= (OR) para encender un bit sin afectar a los demás.
+- Usamos &= ~ (AND con NOT) para apagar un bit sin afectar a los demás.
 
-.
+---
 
-.
+### Paso 3: Operar el Pin
 
-.
+Con el pin ya configurado, podemos interactuar con él.
 
-*bits* 30 y 31 ----> Pin 15 del puerto
+**Para Escribir en un Pin de Salida**
 
-Entonces podemos deducir la siguiente ecuación:
+- `LPC_GPIOx->FIOSET`: **Pone en ALTO (1)** el pin correspondiente. Escribir un 0 no tiene efecto.
+- `LPC_GPIOx->FIOCLR`: **Pone en BAJO (0)** el pin correspondiente. Escribir un 0 no tiene efecto.
 
-$ posicion_{bit} = nro_{pin} * 2 $
+**Ejemplc de código:**
 
-Ademas sabemos que nuestra ecuación general es:
+```c
+// Pone en ALTO (enciende LED) el pin P0.22
+LPC_GPIO0->FIOSET = (1 << 22);
 
-$$ P_{x} \cdot _{y} $$
+// Pone en BAJO (apaga LED) el pin P0.22
+LPC_GPIO0->FIOCLR = (1 << 22);
+```
 
-### Cómo Calcular la Posición de Bits en `PINSEL`
+**Para Leer un Pin de Entrada**
 
-Para cualquier pin **P<sub>x.y</sub>**, sigue estos pasos para encontrar los bits que lo controlan:
+- `LPC_GPIOx->FIOPIN`: Contiene el estado actual de **todos los pines** del puerto. Se debe usar una máscara para leer el estado de un pin específico.
 
-#### **1. Si el pin `y` está en la Mitad Inferior (0 a 15):**
-
--   **Fórmula:**
-    $bit_{inicio} = 2 \cdot y$
--   **Ejemplo para P2.10 (`y=10`):**
-    $bit_{inicio} = 2 \cdot 10 = 20$.
-    *Los bits a controlar son el **20** y el **21**.*
--   **Código de ejemplo para limpiar los bits:**
-    ```c
-    // Limpia los bits 20 y 21
-    LPC_PINCON->PINSEL4 &= ~(3 << 20);
-    ```
-
-#### **2. Si el pin `y` está en la Mitad Superior (16 a 31):**
-
--   **Fórmula:**
-    $bit_{inicio} = (y - 16) \cdot 2$
--   **Ejemplo para P0.22 (`y=22`):**
-    $bit_{inicio} = (22 - 16) \cdot 2 = 6 \cdot 2 = 12$.
-    *Los bits a controlar son el **12** y el **13**.*
--   **Código de ejemplo para limpiar los bits:**
-    ```c
-    // Limpia los bits 12 y 13
-    LPC_PINCON->PINSEL1 &= ~(3 << 12);
-    ```
-
+```c
+// Lee el estado del pin P2.10 (un botón, por ejemplo)
+if (LPC_GPIO2->FIOPIN & (1 << 10)) {
+    // El pin P2.10 está en ALTO
+} else {
+    // El pin P2.10 está en BAJO
+}
+```
 
