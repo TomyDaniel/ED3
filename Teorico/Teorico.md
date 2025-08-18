@@ -140,3 +140,105 @@ if (LPC_GPIO2->FIOPIN & (1 << 10)) {
 }
 ```
 
+---
+
+---
+
+## Introducción a la Gestión de Clocks
+
+Antes de que el microcontrolador pueda ejecutar una sola instrucción o mover un solo bit en un pin GPIO, su sistema de reloj debe estar configurado. El clock del microcontrolador; sincroniza todas las operaciones internas.
+
+### ¿Por Qué son Importantes los Clocks?
+
+1.  **Velocidad de Ejecución:** La frecuencia del clock principal determina cuántas instrucciones por segundo puede ejecutar la CPU. Un clock más rápido significa un programa más rápido.
+2.  **Funcionamiento de Periféricos:** Cada periférico (UART, Timers, ADC, etc.) necesita una señal de reloj para funcionar. La frecuencia de este reloj determina sus velocidades de operación.
+3.  **Gestión de Energía:** Una de las tareas más importantes es **habilitar el reloj solo para los periféricos que vamos a usar**. Si no usas el ADC, apagas su reloj. Esto reduce drásticamente el consumo de energía del chip.
+
+### El Sistema de Clocks del LPC1769
+
+El proceso para generar el clock principal del sistema sigue una cadena:
+
+`Fuente de Reloj` -> `PLL0 (Multiplicador)` -> `Divisor de CPU` -> `Reloj final (CCLK)`
+
+1.  **Fuente de Reloj:** El "marcapasos" inicial. Puede ser:
+    *   **Oscilador RC Interno (IRC):** Viene dentro del chip (~4 MHz). Es impreciso pero funciona sin componentes externos.
+    *   **Oscilador Principal (Externo):** Se conecta un cristal de cuarzo externo (típicamente de 12 MHz). Es muy preciso y es la opción recomendada.
+
+2.  **PLL:** Es un circuito que toma una frecuencia de entrada baja y la multiplica para generar una frecuencia muy alta. Esto permite que el núcleo del procesador funcione a velocidades elevadas como 100 MHz.
+
+3.  **Divisor de CPU (CCLKSEL):** Toma la salida del PLL y la divide para obtener la frecuencia final del procesador.
+
+### Pasos Prácticos para Configurar los Clocks
+
+La configuración de los relojes se realiza manipulando registros dentro del **System Control Block** (`LPC_SC`).
+
+#### Paso 0: Habilitar el Clock del Periférico que Vas a Usar (`PCONP`)
+
+Esta es la regla de oro: **antes de configurar o usar CUALQUIER periférico, debes darle energía habilitando su reloj.** Esto se hace en el registro `PCONP`.
+
+Por defecto, tras un reset, solo el clock para GPIO está habilitado.
+
+```c
+// Para poder usar los registros PINSEL (parte del bloque PINCONNECT)
+// debemos habilitar su reloj. PCPIN es el bit 15.
+LPC_SC->PCONP |= (1 << 15);
+
+// Habilitar el reloj para el periférico GPIO (ya está por defecto, pero es bueno saberlo)
+// PCGPIO es el bit 15, pero ¡ojo!, el bloque PINCONNECT y GPIO son cosas distintas
+// aunque a menudo se usan juntos. ¡El manual de usuario es clave aquí!
+// Para GPIO, no se necesita PCONP, pero sí para los otros periféricos como UART, Timers, etc.
+
+// Ejemplo: Habilitar reloj para el Timer0 (bit 1) y UART0 (bit 3)
+LPC_SC->PCONP |= (1 << 1) | (1 << 3);
+```
+
+**¡Importante!** Un error muy común es intentar escribir en un registro de un periférico (ej: LPC_UART0->LCR) sin haber habilitado su clock en PCONP primero. La escritura simplemente no tendrá efecto.
+
+### Configuración del Clock Principal
+
+1. Seleccionar la fuente de reloj:
+
+```c
+// Selecciona el Oscilador Principal (cristal externo) como fuente para el PLL0
+LPC_SC->CLKSRCSEL = (1 << 0);
+```
+
+2. Configurar el PLL0 para multiplicar la frecuencia:
+La meta es llegar a un CCLK de 100 MHz desde un cristal de 12 MHz.
+
+- Se usan un multiplicador (M) y un divisor (N).
+- Se calcula una frecuencia intermedia F_CCO = (2 * M * F_in) / N. F_CCO debe estar entre 275 y 550 MHz.
+- Para 100 MHz, una configuración común es: M=50, N=3.
+- F_CCO = (2 * 50 * 12 MHz) / 3 = 400 MHz.
+
+```c
+// Configurar multiplicador y divisor (M-1 y N-1)
+// M = 50 -> M-1 = 49. N = 3 -> N-1 = 2
+LPC_SC->PLL0CFG = (49 << 0) | (2 << 16); 
+LPC_SC->PLL0CON = (1 << 0); // Habilitar PLL0
+LPC_SC->PLL0FEED = 0xAA;    // Secuencia de alimentación obligatoria
+LPC_SC->PLL0FEED = 0x55;
+
+// Esperar a que el PLL se "enganche" (se estabilice)
+while (!(LPC_SC->PLL0STAT & (1 << 26)));
+
+LPC_SC->PLL0CON = (1 << 0) | (1 << 1); // Conectar PLL0 como fuente de reloj
+LPC_SC->PLL0FEED = 0xAA;
+LPC_SC->PLL0FEED = 0x55;
+```
+
+3. Configurar el divisor de la CPU para obtener 100 MHz:
+
+Tenemos F_CCO a 400 MHz. Queremos CCLK a 100 MHz. Necesitamos dividir por 4.
+
+- El divisor es el valor del registro + 1. Para dividir por 4, escribimos un 3.
+
+```c
+// CCLKCFG = 3, significa que el divisor es 4
+LPC_SC->CCLKCFG = 3;
+```
+
+**Resumen del Flujo de Clocks**
+
+Siempre que se use un nuevo periférico, primero ve al registro PCONP y enciende su bit correspondiente.
+La configuración del reloj principal es compleja, pero generalmente se hace una sola vez al inicio del sistema y no se vuelve a tocar. Es bueno entenderla para saber a qué velocidad está corriendo tu microcontrolador.
