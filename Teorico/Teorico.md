@@ -280,3 +280,114 @@ void delay_ms_systick(uint32_t milisegundos) {
     SysTick->CTRL = 0;
 }
 ```
+
+## Ampliando el Uso del SysTick: El Método de Interrupción (No Bloqueante)
+
+Ya vimos cómo crear una función `delay()` que detiene el procesador. Pero, ¿qué pasa si necesitamos que una tarea se ejecute periódicamente **sin congelar nuestro programa principal**?
+
+Aquí es donde entra en juego el método más potente del SysTick: las **interrupciones**.
+
+### La Diferencia Clave: Bloqueante vs. No Bloqueante
+
+*   **Polling (función `delay()`):** Es **bloqueante**.
+*   **Interrupción (`SysTick_Handler()`):** Es **no bloqueante**.
+
+### ¿Cómo Funciona una Interrupción?
+
+En lugar de que nuestro código principal pregunte constantemente "¿ya terminó?", el hardware del microcontrolador se encarga de todo.
+
+1.  **SysTick:** El temporizador cuenta hasta cero como siempre.
+2.  **La Novedad:** Al llegar a cero, en lugar de solo levantar una bandera, el SysTick envía una "señal de ayuda" o una "solicitud de interrupción" al **NVIC**.
+3.  **NVIC:** Es el "gestor de eventos" del procesador. Recibe la señal del SysTick.
+4.  **El Salto:** El NVIC detiene forzosamente la ejecución del código `main()`, guarda su estado actual y obliga al procesador a saltar y ejecutar una función especial: `SysTick_Handler()`.
+5.  **El Retorno:** Una vez que el código dentro de `SysTick_Handler()` termina, el NVIC restaura el estado anterior y el programa `main()` continúa exactamente donde se quedó, como si nada hubiera pasado.
+
+### Flujo de Programación para una Interrupción
+
+El proceso es similar al de polling, pero con dos diferencias cruciales en la configuración.
+
+#### Paso 1: Calcular y Cargar el Valor de Recarga (`LOAD`)
+Este paso es idéntico. Calculamos los ticks necesarios para el intervalo deseado.
+
+```c
+// Para una interrupción cada 1ms con CPU a 100MHz
+// (100,000,000 / 1000) - 1 = 99999
+SysTick->LOAD = (SystemCoreClock / 1000) - 1; 
+```
+
+#### Paso 2: Resetear el Contador (`VAL`)
+También es idéntico. Limpiamos el contador para un inicio limpio.
+
+```c
+SysTick->VAL = 0;
+```
+
+#### Paso 3: Habilitar el Timer y la Interrupción (`CTRL`)
+Aquí está la primera gran diferencia. Además de habilitar el timer y seleccionar la fuente de reloj, debemos activar el bit que genera la solicitud de interrupción.
+- `ENABLE` (Bit 0) = 1: Habilita el contador.
+- `CLKSOURCE` (Bit 2) = 1: Usa el reloj del procesador (CCLK).
+- `TICKINT` (Bit 1) = 1: ¡CLAVE! Habilita la solicitud de interrupción al llegar a cero.
+
+```c
+// Habilitar SysTick, reloj CPU Y la interrupción
+SysTick->CTRL = (1 << 2) | (1 << 1) | (1 << 0);
+```
+
+#### Paso 4: Escribir el Código del "Handler"
+Debemos crear la función que se ejecutará automáticamente. El nombre SysTick_Handler está predefinido por el sistema y no se puede cambiar.
+
+```c
+// Esta función será llamada por el hardware cada vez que el SysTick llegue a cero.
+void SysTick_Handler(void) {
+    // Aquí va el código que queremos ejecutar periódicamente.
+    // Ejemplo: Invertir el estado de un LED, incrementar un contador, etc.
+}
+```
+
+---
+
+### Código de Ejemplo: Un Contador que se Incrementa "en Segundo Plano"
+Este ejemplo configura el SysTick para que interrumpa cada milisegundo e incremente una variable global. El bucle main() queda libre para otras tareas.
+
+```c
+#include "LPC17xx.h"
+
+// Usamos 'volatile' para asegurar que el compilador no optimice la variable,
+// ya que es modificada por una interrupción y leída en el main.
+volatile uint32_t ms_ticks = 0;
+
+/**
+ * @brief Esta función se ejecuta automáticamente cada 1ms gracias al SysTick.
+ */
+void SysTick_Handler(void) {
+    ms_ticks++; // Incrementa el contador de milisegundos
+}
+
+int main(void) {
+    // 1. Configurar el SysTick para que interrumpa cada 1ms.
+    // Asume SystemCoreClock ya está configurado (ej: 100MHz).
+    SysTick_Config(SystemCoreClock / 1000);
+
+    // Bucle principal infinito.
+    // El microprocesador ejecutará este código, y será interrumpido
+    // cada 1ms para ejecutar SysTick_Handler().
+    while(1) {
+        // El programa principal puede hacer otras cosas aquí.
+        // Por ejemplo, podríamos comprobar el valor de ms_ticks:
+        if (ms_ticks > 5000) {
+            // Han pasado 5 segundos... hacer algo.
+            // ...
+        }
+    }
+    return 0; // Nunca se llega aquí
+}
+```
+
+### Resumen: Polling vs. Interrupción
+
+| Característica | `delay()` (Polling) | `SysTick_Handler()` (Interrupción) |
+| :--- | :--- | :--- |
+| **¿CPU Ocupada?** | **Sí.** 100% ocupada esperando. | **No.** Libre para otras tareas. |
+| **Naturaleza** | **Bloqueante** (detiene todo). | **No Bloqueante** (trabaja en segundo plano). |
+| **Bit `TICKINT` (`CTRL[1]`)**| `0` (Desactivado). | `1` (Activado). |
+| **Cuándo Usarlo** | Para pausas simples y cortas donde no importa detener el sistema. | Para tareas periódicas, bases de tiempo, o cuando el programa principal debe seguir funcionando. |
