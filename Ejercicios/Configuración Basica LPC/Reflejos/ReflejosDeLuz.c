@@ -46,10 +46,32 @@ int main(void) {
 
             for(volatile int j=0; j<4; j++){
                 if((LPC_GPIO0->FIOPIN & btt[j]) == 0){
-
+                    for(volatile int k=0; k<6; k++){
+                        if((LPC_GPIO1->FIOPIN & leds[k]) == 0){
+                            LPC_GPIO1->FIOSET = leds[k];
+                            delay(100);
+                            if((LPC_GPIO0->FIOPIN & btt[k]) == 0){
+                                LPC_GPIO1->FIOCLR = leds[k];
+                                for(volatile int o=0; o<3; o++){
+                                    LPC_GPIO1->FIOSET = LED5;
+                                    delay(25);
+                                    LPC_GPIO1->FIOCLR = LED5;
+                                    delay(25);
+                                }
+                            }else{
+                                LPC_GPIO1->FIOSET = LED6;
+                                for(volatile int p=0; p<5; p++){
+                                    LPC_GPIO1->FIOSET = leds[p];
+                                    delay(25);
+                                    LPC_GPIO1->FIOCLR = leds[p];
+                                    delay(25);
+                                }
+                                LPC_GPIO1->FIOCLR = LED6;
+                            }
+                        }
+                    }
                 }
             }
-            
         }
     }
     return 0 ;
