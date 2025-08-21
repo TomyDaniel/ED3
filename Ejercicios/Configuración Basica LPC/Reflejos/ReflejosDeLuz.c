@@ -8,6 +8,8 @@
 
 #define timing 10000
 
+unsigned int semilla = 1234;
+
 #define LED1 (1 << 18)
 #define LED2 (1 << 19)
 #define LED3 (1 << 20)
@@ -25,53 +27,103 @@ void delay(int cantidad);
 
 void configuraciones(void);
 
+unsigned int mi_rand(void);
 
 int main(void) {
 
     configuraciones();
 
-    int leds[6] = {LED1, LED2, LED3, LED4, LED5, LED6};
+    int leds[6] = {LED1, LED2, LED3, LED4};
 
     int btt[4] = {BUTTON1, BUTTON2, BUTTON3, BUTTON4};
 
-    int estadoJuego = 0;
+    int estadoJuego = 1;
+
+    int indice = 0;
+
+    int tiempoDef = 1000;
 
     while(1) {
 
-        for(volatile int i=0; i<5; i++){
-            LPC_GPIO1->FIOSET = leds[i];
-            delay(300);
-            LPC_GPIO1->FIOCLR = leds[i];
-            delay(300);
+        switch(estadoJuego){
+            case 1: // Esperando inicio
+                for(volatile int i=0; i<4; i++){
+                    LPC_GPIO1->FIOSET = leds[i];
+                    delay(300);
+                    LPC_GPIO1->FIOCLR = leds[i];
+                    delay(300);
+                }
+                for(volatile int i=0; i<4; i++){
+                    if((LPC_GPIO0->FIOPIN & btt[i]) == 0){
+                        estadoJuego = 2;
+                    }
+                }
+                break;
+            case 2: // Encencido LED
+                indice = mi_rand() % 4;
+                estadoJuego = 3;
+                break;
+            case 3: // Input
 
-            for(volatile int j=0; j<4; j++){
-                if((LPC_GPIO0->FIOPIN & btt[j]) == 0){
-                    for(volatile int k=0; k<6; k++){
-                        if((LPC_GPIO1->FIOPIN & leds[k]) == 0){
-                            LPC_GPIO1->FIOSET = leds[k];
-                            delay(100);
-                            if((LPC_GPIO0->FIOPIN & btt[k]) == 0){
-                                LPC_GPIO1->FIOCLR = leds[k];
-                                for(volatile int o=0; o<3; o++){
-                                    LPC_GPIO1->FIOSET = LED5;
-                                    delay(25);
-                                    LPC_GPIO1->FIOCLR = LED5;
-                                    delay(25);
-                                }
-                            }else{
-                                LPC_GPIO1->FIOSET = LED6;
-                                for(volatile int p=0; p<5; p++){
-                                    LPC_GPIO1->FIOSET = leds[p];
-                                    delay(25);
-                                    LPC_GPIO1->FIOCLR = leds[p];
-                                    delay(25);
-                                }
-                                LPC_GPIO1->FIOCLR = LED6;
+                int tiempoTrans = 0;
+                int acierto = 0;
+
+                LPC_GPIO1->FIOSET = leds[indice];
+                
+                while(tiempoTrans < tiempoDef){
+                    if ((LPC_GPIO0->FIOPIN & btt[indice]) == 0) {
+                        acierto = 1;
+                        break;      
+                    }
+
+                    for (int i = 0; i < 4; i++) {
+                        if (i != indice) {
+                            if ((LPC_GPIO0->FIOPIN & btt[i]) == 0) {
+                                acierto = 2;
+                                break;
                             }
                         }
                     }
+                    if (acierto == 2) {
+                        break;
+                    }
+
+                    delay(1);
+                    tiempoTrans++;
                 }
-            }
+
+                LPC_GPIO1->FIOCLR = leds[indice];
+
+                if (acierto == 1) {
+                    
+                    for(volatile int i=0; i<3; i++){
+                        LPC_GPIO1->FIOSET = LED5;
+                        delay(tiempoDef);
+                        LPC_GPIO1->FIOCLR = LED5;
+                        delay(tiempoDef);
+                    }
+
+                    tiempoDef -= 50;
+                    estadoJuego = 2;
+
+                } else { 
+                    
+                    LPC_GPIO1->FIOCLR = leds[indice];
+                    LPC_GPIO1->FIOSET = LED6;
+
+                    for(volatile int i=0; i<4; i++){
+                        LPC_GPIO1->FIOSET = leds[i];
+                        delay(50);
+                        LPC_GPIO1->FIOCLR = leds[i];
+                        delay(50);
+                    }
+
+                    LPC_GPIO1->FIOCLR = LED6;
+                    
+                    estadoJuego = 1;
+                }
+            break;
+
         }
     }
     return 0 ;
@@ -92,7 +144,12 @@ void configuraciones(void){
 
     // config. botones
 
-    LPC_PINCON->PINSEL0 &= ~(0xF << 0);
+    LPC_PINCON->PINSEL0 &= ~(0xFF << 0);
 
     LPC_GPIO0->FIODIR &= ~(BUTTON1 | BUTTON2 | BUTTON3 | BUTTON4);
+}
+
+unsigned int mi_rand(void) {
+    semilla = semilla * 1103515245 + 12345;  // cambia la semilla
+    return (semilla >> 16) & 0x7FFF;         // devuelve un número pseudoaleatorio
 }
