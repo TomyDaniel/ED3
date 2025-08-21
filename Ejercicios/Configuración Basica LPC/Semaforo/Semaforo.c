@@ -8,6 +8,10 @@
 
 #define timing 1000000
 
+#define LED1 (1 << 22)
+#define LED2 (1 << 25)
+#define LED3 (1 << 26)
+
 void delay(int cantidad);
 
 void configuraciones(void);
@@ -19,21 +23,17 @@ int main(void) {
 
     while(1) {
 
-    	LPC_GPIO2->FIOCLR = (1 << 5);
-    	LPC_GPIO0->FIOCLR = (1 << 22);
-        LPC_GPIO1->FIOSET = (1 << 29);
-
+        LPC_GPIO0->FIOCLR = LED1;
         delay(5);
-
-        LPC_GPIO1->FIOCLR = (1 << 29);
-        LPC_GPIO2->FIOSET = (1 << 5);
-
-        delay(2);
-
-        LPC_GPIO1->FIOCLR = (1 << 29); // Por las dudas
-        LPC_GPIO2->FIOCLR = (1 << 5);
-        LPC_GPIO0->FIOSET = (1 << 22);
-
+        LPC_GPIO3->FIOSET = LED1;
+        delay(5);
+        LPC_GPIO0->FIOCLR = LED2;
+        delay(5);
+        LPC_GPIO3->FIOSET = LED2;
+        delay(5);
+        LPC_GPIO0->FIOCLR = LED3;
+        delay(5);
+        LPC_GPIO3->FIOSET = LED3;
         delay(5);
 
     }
@@ -47,15 +47,11 @@ void delay(int cantidad){
 
 void configuraciones(void){
 
-	LPC_PINCON->PINSEL3 &= ~(3 << 26);
-
-	LPC_GPIO1->FIODIR |= (1 << 29);
-
-	LPC_PINCON->PINSEL4 &= ~(3 << 10);
-
-	LPC_GPIO2->FIODIR |= (1 << 5);
-
 	LPC_PINCON->PINSEL1 &= ~(3 << 12);
 
-	LPC_GPIO0->FIODIR |= (1 << 22);
+    LPC_GPIO0->FIODIR |= LED1;
+
+    LPC_PINCON->PINSEL7 &= ~(8 << 18);
+
+    LPC_GPIO3->FIODIR |= (LED2 | LED3);
 }
