@@ -773,3 +773,210 @@ int main(void) {
     return 0; // Nunca se llega aquí
 }
 ```
+
+---
+
+## El Convertidor Analógico-Digital (ADC)
+
+### 1. ¿Qué es y por qué lo necesitamos?
+
+El microcontrolador vive en un mundo binario de `1`s y `0`s (ALTO y BAJO). Pero el mundo real es **analógico**: la temperatura, la luz, el volumen o la posición de una perilla no son solo "encendido" o "apagado", sino que tienen un rango continuo de valores.
+
+El **Convertidor Analógico-Digital (ADC)** es el traductor que mide una señal analógica (como un voltaje) y la convierte en un número digital que el procesador puede entender.
+
+En el LPC1769, el ADC tiene una resolución de **12 bits**. Esto significa que puede representar un voltaje de entrada con 2¹² = **4096** niveles distintos (del 0 al 4095).
+
+---
+
+### 2. El Proceso de Conversión en 6 Pasos
+
+Al igual que con el SysTick, interactuar con el ADC sigue una secuencia lógica y repetible. Para realizar una única lectura (método de "polling" o sondeo), seguiremos estos pasos:
+
+1.  **Paso 1: Encender el Periférico (PCONP)**
+    -   Registro: `LPC_SC->PCONP`
+    -   Propósito: Darle energía al bloque de hardware del ADC. Sin esto, el periférico está "dormido" para ahorrar energía.
+2.  **Paso 2: Configurar la Función del Pin (PINSEL)**
+    -   Registro: `LPC_PINCON->PINSELx`
+    -   Propósito: Indicarle al pin que su función no será GPIO, sino **entrada analógica**.
+3.  **Paso 3: Configurar el ADC (AD0CR)**
+    -   Registro: `LPC_ADC->AD0CR`
+    -   Propósito: El "panel de control" del ADC. Aquí seleccionamos el canal a leer, la velocidad de conversión y lo activamos.
+4.  **Paso 4: Iniciar la Conversión (AD0CR)**
+    -   Registro: `LPC_ADC->AD0CR`
+    -   Propósito: Dar la orden de "¡Mide ahora!".
+5.  **Paso 5: Esperar a que Termine (AD0GDR)**
+    -   Registro: `LPC_ADC->AD0GDR`
+    -   Propósito: Monitorear una bandera que nos avisa cuando la conversión ha finalizado.
+6.  **Paso 6: Leer el Resultado (AD0GDR)**
+    -   Registro: `LPC_ADC->AD0GDR`
+    -   Propósito: Extraer el número digital de 12 bits del registro de resultados.
+
+---
+
+### Análisis Detallado: Los Registros del ADC en Acción
+
+#### Paso 1: Encender el Periférico (`PCONP`)
+
+El registro `PCONP` (Power Control for Peripherals) es el interruptor general. Cada bit controla la energía de un periférico diferente. Para el ADC, necesitamos encender el bit 12.
+
+```c
+// Habilita la energía para el periférico ADC (PCADC = bit 12)
+LPC_SC->PCONP |= (1 << 12);
+```
+
+#### Paso 2: Configurar el Pin (`PINSEL` y `PINMODE`)
+
+Supongamos que queremos leer del canal 0 del ADC, que está en el pin **P0.23**.
+
+1.  **Seleccionar la función:** Consultando el manual, vemos que la función ADC para P0.23 es la primera alternativa (`01`).
+    -   Pin `P0.23` -> `y=23`, por lo que usamos `PINSEL1`.
+    -   Posición de los bits: `(23 - 16) * 2 = 14`. Debemos modificar los bits **14** y **15**.
+    -   Para poner `01`, necesitamos que el bit 14 sea `1` y el bit 15 sea `0`.
+
+    ```c
+    // Pone el bit 14 en 1 para seleccionar la función AD0.0
+    LPC_PINCON->PINSEL1 |= (1 << 14);
+    // Pone el bit 15 en 0
+    LPC_PINCON->PINSEL1 &= ~(1 << 15);
+    ```
+
+2.  **Modo del pin (Opcional pero recomendado):** Para entradas analógicas, es crucial que no haya resistencias internas de pull-up o pull-down que puedan alterar la medición. Deshabilitamos ambas.
+    -   El registro `PINMODE` usa 2 bits por pin, igual que `PINSEL`. `10` significa "sin pull-up ni pull-down".
+    
+    ```c
+    // Configura P0.23 en modo "ni pull-up ni pull-down" (valor 10)
+    // Bit 15=1, Bit 14=0
+    LPC_PINCON->PINMODE1 |= (1 << 15);
+    LPC_PINCON->PINMODE1 &= ~(1 << 14);
+    ```
+
+#### Paso 3: Configurar el Registro de Control (`AD0CR`)
+
+Este es el registro más importante. Lo configuraremos para una lectura simple.
+
+| Bits    | Nombre    | Descripción                                                                                                 |
+|:--------|:----------|:--------------------------------------------------------------------------------------------------------------|
+| `0-7`   | `SEL`     | **Selector de Canal.** Un bitmask. Para leer el canal 0, ponemos un `1` en el bit 0. `(1 << 0)`.                |
+| `8-15`  | `CLKDIV`  | **Divisor de Reloj.** El ADC necesita un reloj < 13 MHz. Si CCLK=100MHz, PCLK=25MHz. `CLKDIV=1` divide por 2 (12.5MHz), lo cual es seguro. |
+| `16`    | `BURST`   | `0` para conversiones controladas por software (una a la vez).                                                |
+| `21`    | `PDN`     | **Power Down.** `1` para poner el ADC en modo operacional (¡Sí, `1` para encender!). `0` para apagarlo.       |
+| `24-26` | `START`   | `000` por ahora. Usaremos este campo más tarde para iniciar la conversión.                                    |
+
+```c
+// 1. Configurar el divisor de reloj. (PCLK/ (CLKDIV+1))
+//    Si CCLK=100MHz, PCLK_ADC=25MHz. 25MHz/(1+1) = 12.5MHz. Seguro.
+uint32_t clkdiv = 1;
+
+// 2. Escribir en el registro de control
+//    PDN=1 (operacional), CLKDIV, SEL (lo pondremos en la función de lectura)
+LPC_ADC->AD0CR = (1 << 21) | (clkdiv << 8);
+```
+
+#### Pasos 4, 5 y 6: El Ciclo de Lectura
+
+Estos tres pasos se realizan juntos cada vez que queremos una nueva medición.
+
+1.  **Seleccionar canal e Iniciar:**
+    -   Modificamos `AD0CR` para seleccionar el canal (ej. `1 << 0` para el canal 0) y para iniciar la conversión (`1 << 24` para START NOW).
+
+2.  **Esperar a que termine:**
+    -   El registro `AD0GDR` (Global Data Register) contiene la bandera `DONE` en el bit 31. Hacemos un bucle hasta que este bit se ponga en `1`.
+
+3.  **Leer el resultado:**
+    -   El resultado de 12 bits está en los bits `15:4` del mismo registro `AD0GDR`. Debemos desplazarlo y enmascararlo.
+
+---
+
+### Código de Implementación: Funciones Reutilizables
+
+Vamos a encapsular esta lógica en dos funciones: `ADC_Init()` y `ADC_Read()`.
+
+```c
+/**
+ * @brief Inicializa el periférico ADC.
+ */
+void ADC_Init(void) {
+    // 1. Encender la energía del ADC (PCONP, bit 12)
+    LPC_SC->PCONP |= (1 << 12);
+
+    // 2. Configurar el pin P0.23 (AD0.0) como entrada analógica
+    //    Función 01 en PINSEL1[15:14]
+    LPC_PINCON->PINSEL1 |= (1 << 14);
+    LPC_PINCON->PINSEL1 &= ~(1 << 15);
+    //    Deshabilitar pull-up/pull-down en PINMODE1[15:14] (modo 10)
+    LPC_PINCON->PINMODE1 |= (1 << 15);
+    LPC_PINCON->PINMODE1 &= ~(1 << 14);
+
+    // 3. Configurar el registro de control del ADC
+    //    PDN=1 (operacional), CLKDIV=1 (para 12.5MHz con PCLK=25MHz)
+    LPC_ADC->AD0CR = (1 << 21) | (1 << 8);
+}
+
+/**
+ * @brief Lee un valor de un canal específico del ADC.
+ * @param channel: El número del canal a leer (0 a 7).
+ * @return El valor digital de 12 bits (0-4095).
+ */
+uint16_t ADC_Read(uint8_t channel) {
+    uint32_t reg_val;
+
+    // 4. Iniciar la conversión
+    //    Construye el comando: selecciona el canal Y pone START en 1
+    reg_val = (1 << channel) | (1 << 24);
+    //    Sobrescribe solo los bits de canal y START, manteniendo la configuración
+    LPC_ADC->AD0CR &= ~((0xFF) | (7 << 24)); // Limpia bits SEL y START
+    LPC_ADC->AD0CR |= reg_val;
+
+    // 5. Esperar a que la conversión termine (DONE bit 31 en AD0GDR)
+    while (!(LPC_ADC->AD0GDR & (1U << 31)));
+
+    // 6. Leer el resultado
+    reg_val = LPC_ADC->AD0GDR;
+    
+    // Extraer el valor de 12 bits (bits 15:4) y retornar
+    return (reg_val >> 4) & 0xFFF;
+}
+```
+
+### Ejemplo Completo: Controlar la Velocidad de un LED con un Potenciómetro
+
+Este programa hace parpadear un LED a una velocidad que depende de la posición de un potenciómetro conectado al canal 0 del ADC.
+
+```c
+#include "LPC17xx.h"
+// Incluir las funciones de Systick y GPIO que ya hemos definido
+// ... void delay_ms_systick(uint32_t ms);
+// ... [funciones de inicialización de GPIO para un LED]
+
+// [Pegar las funciones ADC_Init() y ADC_Read() aquí arriba]
+
+int main(void) {
+    uint16_t adc_value;
+    uint32_t delay_time;
+
+    // Configurar los relojes del sistema (ej. a 100MHz)
+    SystemInit();
+    
+    // Inicializar el GPIO para el LED (ej. P0.22 como salida)
+    LED_Init(); 
+
+    // Inicializar el ADC
+    ADC_Init();
+
+    while(1) {
+        // Leer el valor del potenciómetro en el canal 0
+        adc_value = ADC_Read(0);
+
+        // Mapear el valor del ADC (0-4095) a un rango de retardo (ej. 10-1000ms)
+        // Regla de tres simple: delay = min_delay + (adc_value/4095.0) * (max_delay - min_delay)
+        delay_time = 10 + (uint32_t)(adc_value * (990.0 / 4095.0));
+        
+        // Hacer parpadear el LED
+        LED_On();
+        delay_ms_systick(delay_time);
+        LED_Off();
+        delay_ms_systick(delay_time);
+    }
+    return 0;
+}
+```
