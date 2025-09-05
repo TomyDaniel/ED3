@@ -60,4 +60,6 @@ void configuraciones(void){
 
     LPC_GPIO2->FIODIR  &= ~Button;
 
+    LPC_PINCON->PINMODE4 &= ~(3 << 24);
+
 }

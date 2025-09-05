@@ -210,7 +210,7 @@ Para afectar a un solo bit, nuestra máscara inicial más simple es el número `
 Necesitamos mover ese bit `1` hasta la posición 22, que es la que controla al pin `P0.22`. Usamos el operador de desplazamiento a la izquierda `<<`.
 
 -   **Antes del desplazamiento:** `0000 0000 0000 0000 0000 0000 0000 0001`
--   **Después de `<< 22`:**   `0000 0100 0000 0000 0000 0000 0000 0000`
+-   **Después de `<< 22`:**   `0000 0000 0100 0000 0000 0000 0000 0000`
 
 Ahora tenemos una máscara con un `1` únicamente en la posición 22 y `0` en todas las demás.
 
@@ -980,3 +980,259 @@ int main(void) {
     return 0;
 }
 ```
+
+## El Convertidor Digital-Analógico (DAC)
+
+### 1. ¿Qué es y por qué lo necesitamos?
+
+Si el ADC son los "oídos" del microcontrolador, el **Convertidor Digital-Analógico (DAC)** es su "voz". Es el proceso inverso al ADC: toma un número digital que el procesador le da y lo convierte en un voltaje analógico preciso en un pin de salida.
+
+¿Para qué sirve esto?
+-   **Generar Señales de Audio:** Crear sonidos y música.
+-   **Controlar Motores:** Ajustar la velocidad de un motor de forma suave y precisa.
+-   **Generar Formas de Onda:** Crear señales sinusoidales, triangulares o de diente de sierra para pruebas o instrumentación.
+-   **Controlar la Intensidad de un LED:** Dimerizar un LED sin usar PWM.
+
+El LPC1769 cuenta con un DAC de **10 bits**. Esto le permite generar 2¹⁰ = **1024** niveles de voltaje distintos, desde 0V hasta el voltaje de referencia (`VREF`).
+
+### 2. El Proceso de 3 Pasos para Usar el DAC
+
+A diferencia del ADC, el DAC es un periférico mucho más simple de configurar y usar. El proceso se reduce a estos tres pasos:
+
+1.  **Paso 1: Configurar la Función del Pin (PINSEL)**
+    -   Registro: `LPC_PINCON->PINSELx`
+    -   Propósito: Indicarle al pin de salida que su función será **AOUT (Analog Output)**.
+2.  **Paso 2: Inicializar el DAC**
+    -   Registro: `LPC_DAC->DACR`
+    -   Propósito: Asegurarse de que la salida comience en un estado conocido, como 0V.
+3.  **Paso 3: Operar el DAC (DACR)**
+    -   Registro: `LPC_DAC->DACR`
+    -   Propósito: Escribir el valor digital (0-1023) que se desea convertir a un voltaje.
+
+> **¡Noticia Importante!** A diferencia de casi todos los demás periféricos, el DAC **no tiene un bit de encendido en el registro `PCONP`**. Su energía está ligada directamente al pin `VDDA`, y su reloj (`PCLK_DAC`) está habilitado por defecto. ¡Esto nos ahorra un paso!
+
+---
+
+### Análisis Detallado: Los Registros del DAC en Acción
+
+#### Paso 1: Configurar el Pin (`PINSEL`)
+
+La salida del DAC está disponible en un pin específico. Según el manual del usuario (Tabla 74), este es el pin **P0.26**.
+
+1.  **Seleccionar la función:** Consultando la Tabla 81 del manual (`PINSEL1`), vemos que la función `AOUT` para el pin `P0.26` es la **segunda función alternativa** (valor `10`).
+    -   Pin `P0.26` -> `y=26`, por lo tanto, usamos el registro `PINSEL1`.
+    -   Posición de los bits: `(26 - 16) * 2 = 20`. Debemos configurar los bits **21** y **20**.
+    -   Para escribir el valor `10`, el bit 21 debe ser `1` y el bit 20 debe ser `0`.
+
+La forma más segura y profesional de configurar esto es:
+1.  Limpiar ambos bits a `00`.
+2.  Luego, establecer solo el bit 21 a `1`.
+
+```c
+// 1. Limpia los bits 21 y 20 de PINSEL1 para P0.26
+LPC_PINCON->PINSEL1 &= ~(3 << 20);
+
+// 2. Establece la función 10 (AOUT)
+//    (2 << 20) crea una máscara ...001000... para poner el bit 21 en 1 y el 20 en 0.
+LPC_PINCON->PINSEL1 |= (2 << 20);
+```
+
+#### Paso 2 y 3: Operar con el Registro del Convertidor DAC (`DACR`)
+
+El registro `LPC_DAC->DACR` (DAC Register) es el corazón del DAC. Es donde escribimos el valor que queremos convertir. Su estructura es un poco particular.
+
+| Bits    | Nombre | Descripción                                                                                               |
+|:--------|:-------|:----------------------------------------------------------------------------------------------------------|
+| `5:0`   | -      | Reservado.                                                                                                |
+| `15:6`  | `VALUE`| **El valor digital de 10 bits.** Aquí es donde va nuestro número de 0 a 1023. ¡Observa que está desplazado!  |
+| `16`    | `BIAS` | Controla el balance entre velocidad y consumo. `0` = alta velocidad/alto consumo. `1` = baja velocidad/bajo consumo. Por defecto es `0`. |
+
+**¡La Clave del `DACR`! El Desplazamiento de Bits**
+
+El hardware fue diseñado de tal manera que el valor de 10 bits **no empieza en el bit 0**, sino en el **bit 6**.
+
+```
+Registro DACR (32 bits)
+... [ Bit 16: BIAS ] [ Bits 15 a 6: VALUE (10 bits) ] [ Bits 5 a 0: Reservado ] ...
+```
+
+Esto significa que para escribir un valor, primero debemos **desplazarlo 6 bits a la izquierda**.
+
+**Fórmula de Escritura:** `LPC_DAC->DACR = (valor_10_bits << 6);`
+
+**Fórmula de Voltaje de Salida:**
+
+El voltaje que aparecerá en el pin P0.26 se calcula con esta fórmula:
+`Vout = VREF * (VALUE / 1024)`
+Donde `VREF` suele ser 3.3V y `VALUE` es nuestro número de 0 a 1023.
+
+---
+
+### Código de Implementación: Funciones Reutilizables
+
+Encapsulamos la lógica en funciones `DAC_Init()` y `DAC_Write()`.
+
+```c
+/**
+ * @brief Inicializa el periférico DAC y configura el pin P0.26.
+ */
+void DAC_Init(void) {
+    // 1. Configurar P0.26 para la función AOUT (10)
+    LPC_PINCON->PINSEL1 &= ~(3 << 20); // Limpiar bits 21:20
+    LPC_PINCON->PINSEL1 |= (2 << 20);  // Establecer función 10
+
+    // 2. Inicializar el DAC con una salida de 0V.
+    LPC_DAC->DACR = 0;
+}
+
+/**
+ * @brief Escribe un valor digital de 10 bits en el DAC para generar un voltaje.
+ * @param value: El valor a convertir (0 a 1023).
+ */
+void DAC_Write(uint16_t value) {
+    // Asegurarse de que el valor no exceda los 10 bits (máscara 0x3FF)
+    // y desplazarlo 6 bits a la izquierda para alinearlo con el campo VALUE.
+    LPC_DAC->DACR = ((value & 0x3FF) << 6);
+}
+```
+
+---
+
+## Apéndice: Glosario de Registros y Drivers (API) **PRIMER PARCIAL**
+
+Esta sección sirve como una referencia rápida y un resumen de los registros de hardware y las funciones de alto nivel (drivers) para los periféricos más comunes del LPC1769.
+
+### 1. Configuración de Pines (PINSEL)
+
+#### 1.1. Registros de Hardware
+
+-   **`LPC_PINCON->PINSELx`**: **Función del Pin.**
+    -   Controla la función principal de cada pin (GPIO, ADC, UART, etc.).
+    -   **2 bits por pin**.
+        -   `00`: Generalmente GPIO.
+        -   `01`, `10`, `11`: Funciones alternativas.
+-   **`LPC_PINCON->PINMODEx`**: **Modo de Resistencia Interna.**
+    -   Configura las resistencias de pull-up o pull-down.
+    -   **2 bits por pin**.
+        -   `00`: Pull-up.
+        -   `01`: Repeater (mantiene el último estado).
+        -   `10`: Sin resistencia (Tristate/Flotante).
+        -   `11`: Pull-down.
+-   **`LPC_PINCON->PINMODE_ODx`**: **Modo de Drenador Abierto (Open-Drain).**
+    -   Permite que el pin solo pueda ponerse en estado BAJO, quedando en alta impedancia en estado ALTO (requiere pull-up externo).
+    -   **1 bit por pin**.
+        -   `0`: Modo Normal (Push-Pull).
+        -   `1`: Modo Open-Drain.
+
+#### 1.2. Estructura y Driver de Configuración
+
+-   **Estructura `PINSEL_CFG_Type`**: Contenedor para configurar un pin de forma completa.
+    -   `Portnum`: Puerto del pin (0-4).
+    -   `Pinnum`: Número del pin (0-31).
+    -   `Funcnum`: Número de función (0-3).
+    -   `Pinmode`: Modo de resistencia (`PULLUP`, `TRISTATE`, `PULLDOWN`).
+    -   `OpenDrain`: Modo de salida (`NORMAL`, `OPENDRAIN`).
+-   **Función `PINSEL_ConfigPin(PinCfg)`**: Aplica la configuración definida en la estructura a un pin.
+
+### 2. Entrada/Salida de Propósito General (GPIO)
+
+#### 2.1. Registros de Hardware
+
+-   **`LPC_GPIOx->FIODIR`**: **Dirección del Pin.**
+    -   Define si un pin GPIO es entrada o salida.
+    -   **1 bit por pin**. `0` = Entrada, `1` = Salida.
+-   **`LPC_GPIOx->FIOMASK`**: **Máscara de Acceso.**
+    -   Permite "proteger" pines para que no sean afectados por escrituras en `FIOSET`, `FIOCLR` o `FIOPIN`.
+    -   **1 bit por pin**. `0` = Acceso habilitado, `1` = Acceso deshabilitado (enmascarado).
+-   **`LPC_GPIOx->FIOPIN`**: **Valor del Pin.**
+    -   **Lectura:** Devuelve el estado lógico actual de todos los pines del puerto.
+    -   **Escritura:** Establece el estado de todos los pines no enmascarados simultáneamente.
+-   **`LPC_GPIOx->FIOSET`**: **Poner en ALTO.**
+    -   Pone en `1` los pines correspondientes a los bits que se escriben como `1`.
+-   **`LPC_GPIOx->FIOCLR`**: **Poner en BAJO.**
+    -   Pone en `0` los pines correspondientes a los bits que se escriben como `1`.
+
+#### 2.2. Registros de Interrupción GPIO
+
+-   **`LPC_GPIOINT->IOxIntEnR`**: Habilita la interrupción por **flanco de subida** en el puerto `x`.
+-   **`LPC_GPIOINT->IOxIntEnF`**: Habilita la interrupción por **flanco de bajada** en el puerto `x`.
+-   **`LPC_GPIOINT->IntStatus`**: Estado general de interrupciones. Indica si hay alguna interrupción pendiente en el Puerto 0 (`P0Int`) o Puerto 2 (`P2Int`).
+-   **`LPC_GPIOINT->IOxIntStatR` / `IOxIntStatF`**: Estado detallado. Indica qué pin específico del puerto `x` generó una interrupción por flanco de subida/bajada.
+-   **`LPC_GPIOINT->IOxIntClr`**: Limpia la bandera de interrupción de un pin específico.
+
+#### 2.3. Funciones de Driver (API)
+
+-   **`GPIO_SetDir(port, pins, dir)`**: Configura la dirección (Entrada/Salida) para un conjunto de `pins` en un `port`.
+-   **`GPIO_SetValue(port, pins)`**: Pone en ALTO los `pins` especificados.
+-   **`GPIO_ClearValue(port, pins)`**: Pone en BAJO los `pins` especificados.
+-   **`GPIO_ReadValue(port)`**: Lee el estado de todos los pines de un `port`.
+
+### 3. Interrupciones Externas (EINT)
+
+#### 3.1. Registros de Hardware
+
+-   **`LPC_SC->EXTINT`**: **Bandera de Interrupción.**
+    -   Se pone en `1` cuando ocurre un evento de interrupción externa. Se limpia escribiendo un `1`.
+-   **`LPC_SC->EXTMODE`**: **Modo de Detección.**
+    -   Configura si la interrupción se dispara por **nivel** (`0`) o por **flanco** (`1`).
+-   **`LPC_SC->EXTPOLAR`**: **Polaridad.**
+    -   Si es modo nivel, define si es activo en BAJO (`0`) o ALTO (`1`).
+    -   Si es modo flanco, define si es por bajada (`0`) o subida (`1`).
+
+#### 3.2. Funciones de Driver (API)
+
+-   **`EXTI_Init()`**: Inicializa las interrupciones externas a su estado por defecto.
+-   **`EXTI_Config(EXTICfg)`**: Configura una línea de interrupción usando una estructura.
+-   **`NVIC_EnableIRQ(EINTx_IRQn)`**: Habilita la interrupción en el controlador de interrupciones (NVIC).
+-   **`EINTx_IRQHandler()`**: Nombre de la función handler que se ejecutará cuando ocurra la interrupción.
+
+### 4. Timer SysTick
+
+#### 4.1. Registros de Hardware (Accesibles directamente)
+
+-   **`SysTick->CTRL`**: **Registro de Control y Estado.**
+    -   `ENABLE` (bit 0): Habilita/deshabilita el contador.
+    -   `TICKINT` (bit 1): Habilita/deshabilita la interrupción.
+    -   `CLKSOURCE` (bit 2): Selecciona la fuente de reloj (interna o externa).
+    -   `COUNTFLAG` (bit 16): Bandera que indica que el contador ha llegado a cero.
+-   **`SysTick->LOAD`**: **Valor de Recarga.**
+    -   Contiene el valor desde el cual el contador comenzará a descender.
+-   **`SysTick->VAL`**: **Valor Actual.**
+    -   Contiene el valor actual del contador. Escribir cualquier valor lo resetea.
+-   **`SysTick->CALIB`**: **Calibración.**
+    -   Contiene un valor de fábrica para generar un intervalo de 10ms si el CCLK es 100MHz.
+
+#### 4.2. Funciones de Driver (API)
+
+-   **`SysTick_Config(ticks)`**: Función principal que configura el SysTick para generar interrupciones periódicas con un valor de recarga de `ticks`.
+-   **`SysTick_Handler()`**: Nombre de la función handler de la interrupción.
+-   **`SYSTICK_Cmd(NewState)`**: Habilita o deshabilita el contador.
+-   **`SYSTICK_IntCmd(NewState)`**: Habilita o deshabilita la generación de interrupciones.
+
+### 5. Convertidor Analógico-Digital (ADC)
+
+#### 5.1. Registros de Hardware
+
+-   **`LPC_SC->PCONP`**: (Bit 12 `PCADC`) Habilita la energía del periférico.
+-   **`LPC_SC->PCLKSEL0`**: (Bits 25:24 `PCLK_ADC`) Configura el reloj del periférico.
+-   **`LPC_ADC->ADCR`**: **Registro de Control.**
+    -   `SEL` (bits 7:0): Selecciona qué canal(es) convertir.
+    -   `CLKDIV` (bits 15:8): Divide el `PCLK_ADC` para obtener el reloj de conversión (< 13MHz).
+    -   `PDN` (bit 21): Pone el ADC en modo operacional (`1`) o power-down (`0`).
+    -   `START` (bits 26:24): Inicia la conversión (ej. `001` = Iniciar ahora).
+-   **`LPC_ADC->ADGDR`**: **Registro de Datos Global.**
+    -   `RESULT` (bits 15:4): Contiene el resultado de 12 bits de la última conversión.
+    -   `DONE` (bit 31): Bandera que indica que la conversión ha finalizado.
+-   **`LPC_ADC->ADDRx`**: Registro de datos específico para el canal `x`.
+
+### 6. Convertidor Digital-Analógico (DAC)
+
+#### 6.1. Registros de Hardware
+
+-   **`LPC_SC->PCLKSEL0`**: (Bits 23:22 `PCLK_DAC`) Configura el reloj (usado por el timer interno para DMA).
+-   **`LPC_DAC->DACR`**: **Registro del Convertidor.**
+    -   `VALUE` (bits 15:6): Valor de 10 bits a convertir. **¡Ojo al desplazamiento!**
+    -   `BIAS` (bit 16): Configura el balance velocidad/consumo.
+-   **`LPC_DAC->DACCTRL`**: **Registro de Control.**
+    -   Controla las operaciones con DMA y el timer interno.
+-   **`LPC_DAC->DACCNTVAL`**: Valor de recarga para el timer interno del DAC.
