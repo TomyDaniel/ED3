@@ -3,12 +3,12 @@
 #define Sensor (1 << 4)
 #define Motor (1 << 15)
 #define LED (1 << 5)
-#define Switch (1 << 4)
+#define Switch (1 << 12) // Cambio el puerto y el pin
 
 volatile uint32_t tiempo_barrera_seg = 5;
 volatile uint32_t tiempo_restante = 0;
 volatile uint8_t pulsaciones_config = 0;
-volatile uint8_t modo_config_activo = 0;
+volatile uint8_t modo_config_activo = 1;
 
 void SysTick_Handler(void);
 void EINT3_IRQHandler(void);
@@ -27,10 +27,14 @@ int main(void){
     tiempo_restante = 3;
     SysTick_Config(SystemCoreClock);
 
-    while(modo_config_activo == 1);
+    while(modo_config_activo == 1){
+        _WFI();
+    };
+
     SysTick->CTRL = 0;
 
     while(1){
+        _WFI();
     }
 }
 
@@ -40,6 +44,11 @@ void SysTick_Handler(void){
             tiempo_restante--;
         } else {
             modo_config_activo = 0;
+
+            if (pulsaciones_config >= 4) {
+                pulsaciones_config = 0;
+            }
+
             switch(pulsaciones_config) {
                 case 0: tiempo_barrera_seg = 5; break;
                 case 1: tiempo_barrera_seg = 10; break;
@@ -71,8 +80,7 @@ void EINT3_IRQHandler(void){
         LPC_GPIOINT->IO2IntClr = Sensor;
         
         
-        if (modo_config_activo == 0 && tiempo_restante == 0) {
-            
+        if (modo_config_activo == 0 && (SysTick->CTRL & SysTick_CTRL_ENABLE_Msk) == 0) {
             if (validar_ticket()) {
                 LPC_GPIO0->FIOSET = Motor;          
                 tiempo_restante = tiempo_barrera_seg;  
@@ -116,9 +124,9 @@ void configPIN(void){
     LPC_GPIO1->FIODIR |= LED;
 
     // Configuracion Switch
-    LPC_PINCON->PINSEL6 &= ~(0b11 << 8);
+    LPC_PINCON->PINSEL4 &= ~(0b11 << 24);
 
     LPC_GPIO3->FIODIR &= ~Switch;
 
-    LPC_PINCON->PINMODE6 &= ~(0b11 << 8);
+    LPC_PINCON->PINMODE4 &= ~(0b11 << 24);
 }
