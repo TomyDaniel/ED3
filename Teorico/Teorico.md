@@ -1236,3 +1236,714 @@ Esta sección sirve como una referencia rápida y un resumen de los registros de
 -   **`LPC_DAC->DACCTRL`**: **Registro de Control.**
     -   Controla las operaciones con DMA y el timer interno.
 -   **`LPC_DAC->DACCNTVAL`**: Valor de recarga para el timer interno del DAC.
+
+---
+
+## Acceso Directo a Memoria (DMA)
+
+### 1. ¿Qué es y por qué es tan importante?
+
+Imagina que tu CPU es un gerente muy ocupado. Tareas como mover datos de un lugar a otro (por ejemplo, desde un buffer de memoria al registro de transmisión de un UART) son repetitivas y consumen mucho tiempo. El **Acceso Directo a Memoria (DMA)** es como contratar a un asistente ultra-eficiente para que se encargue de todas estas mudanzas de datos.
+
+El controlador DMA es un periférico especializado que puede transferir datos entre la memoria y los periféricos **sin ninguna intervención de la CPU**.
+
+**Beneficios Clave:**
+
+1.  **Libera a la CPU:** Mientras el DMA mueve datos en segundo plano, la CPU queda libre para ejecutar lógica de programa más compleja.
+2.  **Alta Velocidad:** El DMA está optimizado para transferencias de datos, haciéndolas mucho más rápidas y eficientes que si la CPU las hiciera instrucción por instrucción.
+3.  **Ahorro de Energía:** La CPU puede entrar en modos de bajo consumo mientras el DMA trabaja, ya que no necesita estar activa.
+4.  **Multitarea Real:** Permite que las operaciones de E/S (como recibir datos de un ADC o enviar por un puerto serie) ocurran simultáneamente con el procesamiento principal, creando un sistema mucho más responsivo.
+
+El controlador del LPC1769 se llama **GPDMA** (General-Purpose DMA) y cuenta con **8 canales**, lo que significa que puede gestionar hasta 8 transferencias de datos independientes simultáneamente.
+
+### 2. El Proceso de una Transferencia DMA en 4 Pasos
+
+Configurar una transferencia DMA implica decirle al "asistente" exactamente qué mover, desde dónde, hacia dónde y cuándo.
+
+1.  **Paso 1: Encender el Periférico (PCONP)**
+    -   Registro: `LPC_SC->PCONP`
+    -   Propósito: Suministrar energía y reloj al controlador GPDMA. Sin esto, todo el bloque está inactivo.
+2.  **Paso 2: Habilitar y Configurar el Controlador (DMACConfig)**
+    -   Registro: `LPC_GPDMA->DMACConfig`
+    -   Propósito: Activar el motor DMA principal. Es el interruptor general del controlador.
+3.  **Paso 3: Configurar un Canal DMA**
+    -   Registros: `LPC_GPDMACHx->...` (donde x es el canal 0-7)
+    -   Propósito: Aquí se define cada detalle de la transferencia:
+        -   **Dirección de Origen:** `DMACCSrcAddr`
+        -   **Dirección de Destino:** `DMACCDestAddr`
+        -   **Información de Control:** `DMACCControl` (Tamaño de la transferencia, ancho de datos, si las direcciones se incrementan, etc.).
+        -   **Próximo Enlace (Opcional):** `DMACCLLI` (Para transferencias encadenadas).
+4.  **Paso 4: Habilitar el Canal (DMACCxConfig)**
+    -   Registro: `LPC_GPDMACHx->DMACCConfig`
+    -   Propósito: Dar la orden final para que el canal configurado comience a esperar su "disparador" (trigger) y comience la transferencia.
+
+---
+
+### Análisis Detallado: Los Registros del DMA en Acción
+
+#### Paso 1: Encender el Periférico (`PCONP`)
+
+Como con la mayoría de los periféricos, el primer paso es habilitar su reloj en el registro de control de energía. El bit para el GPDMA es el **bit 29**.
+
+```c
+// Habilita la energía para el periférico GPDMA (PCGPDMA = bit 29)
+LPC_SC->PCONP |= (1 << 29);
+```
+
+#### Paso 2: Configurar el Controlador (`DMACConfig`)
+
+Este registro es el interruptor maestro.
+-   Bit 0 (`E`): **Enable**. Ponerlo en `1` enciende el controlador DMA.
+-   Bit 1 (`M`): **Endianness Mode**. Controla el modo Endian para las transferencias. Por defecto es Little-Endian (`0`), que es lo que usaremos.
+
+```c
+// Habilita el controlador GPDMA
+LPC_GPDMA->DMACConfig = 1;
+```
+También es importante limpiar cualquier interrupción pendiente que pudiera haber quedado de un estado anterior.
+```c
+// Limpia las banderas de interrupción de Terminal Count y Error
+LPC_GPDMA->DMACIntTCClear = 0xFF;
+LPC_GPDMA->DMACIntErrClear = 0xFF;
+```
+
+#### Paso 3: Configurar un Canal Específico
+
+Aquí es donde reside la mayor parte del trabajo. Cada uno de los 8 canales tiene su propio conjunto de registros. Supongamos que configuramos el **Canal 0**.
+
+##### a. Direcciones de Origen y Destino
+
+Son registros de 32 bits que simplemente apuntan a las direcciones de memoria de inicio.
+
+```c
+// Origen: La dirección de un array en memoria
+LPC_GPDMACH0->DMACCSrcAddr = (uint32_t)miArrayFuente;
+
+// Destino: La dirección del registro de datos de un periférico (ej. UART)
+LPC_GPDMACH0->DMACCDestAddr = (uint32_t)&(LPC_UART0->THR);
+```
+
+##### b. Registro de Control (`DMACCxControl`)
+
+Este registro define **cómo** se realizará la transferencia.
+
+| Bits    | Nombre          | Descripción                                                                                                  |
+|:--------|:----------------|:-------------------------------------------------------------------------------------------------------------|
+| `11:0`  | `TransferSize`  | **Cuántos datos mover.** Número de transferencias (no bytes). Si el ancho es byte, es el número de bytes.      |
+| `20:18` | `SWidth`        | **Ancho del Origen.** `000`=Byte, `001`=Halfword(16b), `010`=Word(32b).                                        |
+| `23:21` | `DWidth`        | **Ancho del Destino.** Igual que `SWidth`. El hardware adapta los anchos si son diferentes.                   |
+| `26`    | `SI`            | **Incremento de Origen.** `1`=La dirección de origen se incrementa después de cada transferencia (para arrays). `0`=No se incrementa (para periféricos). |
+| `27`    | `DI`            | **Incremento de Destino.** `1`=La dirección de destino se incrementa. `0`=No se incrementa.                    |
+| `31`    | `I`             | **Interrupción.** `1`=Genera una interrupción cuando la transferencia termina (`TransferSize` llega a 0).      |
+
+**Ejemplo de configuración para enviar un array de 50 bytes a un UART:**
+```c
+uint32_t dma_control_valor = 0;
+dma_control_valor |= (50 << 0);       // TransferSize = 50
+dma_control_valor |= (0 << 18);       // SWidth = Byte
+dma_control_valor |= (0 << 21);       // DWidth = Byte
+dma_control_valor |= (1 << 26);       // SI = Incrementar origen (recorremos el array)
+dma_control_valor |= (0 << 27);       // DI = No incrementar destino (UART THR es una dirección fija)
+dma_control_valor |= (1 << 31);       // I = Habilitar interrupción al terminar
+
+LPC_GPDMACH0->DMACCControl = dma_control_valor;
+```
+
+#### Paso 4: Habilitar y Vincular el Canal (`DMACCxConfig`)
+
+Este es el último paso, donde vinculamos el canal a un periférico y lo activamos.
+
+| Bits    | Nombre            | Descripción                                                                                                  |
+|:--------|:------------------|:-------------------------------------------------------------------------------------------------------------|
+| `0`     | `E`               | **Channel Enable.** `1` para activar el canal. El canal queda a la espera de un request.                        |
+| `5:1`   | `SrcPeripheral`   | **ID del Periférico de Origen.** Si la transferencia es Periférico -> Memoria, aquí se indica qué periférico. (Ej: ADC es 4). |
+| `10:6`  | `DestPeripheral`  | **ID del Periférico de Destino.** Si la transferencia es Memoria -> Periférico, aquí se indica qué periférico. (Ej: UART0 Tx es 2). |
+| `13:11` | `TransferType`    | **Tipo de Transferencia.** `001`=Memoria a Periférico, `010`=Periférico a Memoria, `000`=Memoria a Memoria.    |
+| `15`    | `IE`              | **Interrupt Error Mask.** `0` para enmascarar (ignorar) interrupciones de error.                             |
+| `16`    | `ITC`             | **Terminal Count Interrupt Mask.** `0` para enmascarar (ignorar) la interrupción de fin de transferencia.      |
+
+**Ejemplo de configuración para nuestro caso de UART:**
+```c
+uint32_t dma_config_valor = 0;
+dma_config_valor |= (1 << 0);        // E = Habilitar canal
+dma_config_valor |= (2 << 6);        // DestPeripheral = 2 (UART0 Tx)
+dma_config_valor |= (1 << 11);       // TransferType = 1 (Memoria a Periférico)
+// No enmascaramos interrupciones, así que dejamos IE e ITC en 0.
+
+LPC_GPDMACH0->DMACCConfig = dma_config_valor;
+```
+¡Listo! Una vez que el registro `U0THR` del UART esté vacío, enviará una solicitud al DMA, y el Canal 0 automáticamente comenzará a transferir los 50 bytes desde el array, uno por uno, sin que la CPU tenga que hacer nada más.
+
+---
+
+### Apéndice: Glosario de Registros y Drivers (API)
+
+### 7. Acceso Directo a Memoria (GPDMA)
+
+#### 7.1. Registros Globales del Controlador
+
+-   **`LPC_SC->PCONP`**: (Bit 29 `PCGPDMA`) Habilita la energía del periférico GPDMA.
+-   **`LPC_GPDMA->DMACConfig`**: **Registro de Configuración Global.**
+    -   `E` (bit 0): Habilita el controlador DMA.
+-   **`LPC_GPDMA->DMACIntStat`**: **Estado de Interrupción.** Indica qué canales tienen una interrupción activa.
+-   **`LPC_GPDMA->DMACIntTCStat`**: **Estado de Interrupción por Fin de Conteo (Terminal Count).** Indica qué canales han completado su transferencia.
+-   **`LPC_GPDMA->DMACIntTCClear`**: **Limpieza de Interrupción TC.** Escribir un `1` en un bit limpia la bandera de interrupción TC para el canal correspondiente.
+-   **`LPC_GPDMA->DMACIntErrStat` / `DMACIntErrClear`**: Igual que los anteriores, pero para condiciones de error.
+-   **`LPC_GPDMA->DMACEnbldChns`**: **Canales Habilitados.** Registro de solo lectura que muestra qué canales están actualmente habilitados.
+
+#### 7.2. Registros por Canal (`LPC_GPDMACHx->...`)
+
+-   **`DMACCSrcAddr`**: **Dirección de Origen.** Puntero de 32 bits a la fuente de los datos.
+-   **`DMACCDestAddr`**: **Dirección de Destino.** Puntero de 32 bits al destino de los datos.
+-   **`DMACCLLI`**: **Elemento de Lista Enlazada (Linked List Item).** Puntero a la siguiente estructura de transferencia para operaciones de scatter-gather. Si es `0`, es la última transferencia.
+-   **`DMACCControl`**: **Control de Transferencia.**
+    -   `TransferSize` (bits 11:0): Número de transferencias a realizar.
+    -   `SWidth`/`DWidth`: Ancho de los datos en origen y destino (Byte, Halfword, Word).
+    -   `SI`/`DI`: Habilita (`1`) o deshabilita (`0`) el auto-incremento de las direcciones de origen/destino.
+    -   `I` (bit 31): Habilita la interrupción por fin de conteo (TC).
+-   **`DMACCConfig`**: **Configuración del Canal.**
+    -   `E` (bit 0): Habilita el canal.
+    -   `SrcPeripheral`/`DestPeripheral`: Asocia el canal con la línea de solicitud de un periférico.
+    -   `TransferType`: Define el flujo de la transferencia (M2P, P2M, M2M).
+    -   `IE`/`ITC`: Máscaras para las interrupciones de error y de fin de conteo.
+
+---
+
+## Usando la Abstracción: CMSIS y los Drivers de Periféricos
+
+Hasta ahora, hemos interactuado directamente con el hardware a través de sus registros (`LPC_GPIO0->FIODIR = ...`). Esto es potente y educativo, pero puede ser propenso a errores, difícil de leer y nada portable. Para solucionar esto, existe el **CMSIS**.
+
+### 1. ¿Qué es CMSIS?
+
+**CMSIS (Cortex Microcontroller Software Interface Standard)** es un estándar creado por ARM para facilitar el desarrollo de software para todos los microcontroladores que usan un núcleo Cortex-M. Es como una "capa de traducción" entre tu código y el hardware.
+
+Se divide en dos partes principales que nos interesan:
+
+1.  **CMSIS-Core:** Es la parte **universal** del estándar. Proporciona acceso estandarizado a los registros del **núcleo del procesador**. Esto incluye:
+    -   El **SysTick Timer**.
+    -   El **NVIC** (Nested Vectored Interrupt Controller).
+    -   Registros especiales del CPU.
+    El código que usa CMSIS-Core para el SysTick en un LPC1769 funcionaría casi sin cambios en un microcontrolador STM32.
+
+2.  **CMSIS-Driver (API de Periféricos):** Esta es la parte **específica del fabricante** (NXP en nuestro caso). NXP proporciona una librería de drivers (un conjunto de archivos `.c` y `.h`) que implementan una API (Application Programming Interface) fácil de usar para controlar **sus periféricos específicos**:
+    -   GPIO
+    -   ADC y DAC
+    -   UART, I2C, SPI
+    -   Timers, PWM, etc.
+
+**La Gran Idea: Abstracción**
+
+En lugar de recordar que el bit 29 de `PCONP` enciende el DMA, simplemente llamarás a una función como `GPDMA_Init()`. La función se encarga de la manipulación de bits por ti.
+
+| Característica | Acceso a Registros Directos | Usando Drivers CMSIS |
+| :--- | :--- | :--- |
+| **Legibilidad** | Baja (`LPC_SC->PCONP |= (1<<12)`) | Alta (`ADC_Init(LPC_ADC, 200000)`) |
+| **Mantenimiento** | Difícil. Un error en un bit es difícil de encontrar. | Fácil. La lógica está encapsulada en funciones. |
+| **Portabilidad** | Nula. Los registros son específicos del chip. | Alta (dentro de la familia de chips del fabricante). |
+| **Curva de Aprendizaje**| Requiere leer el manual de usuario a fondo. | Requiere leer la documentación de la API del driver. |
+
+---
+
+### 2. El Nuevo Flujo de Trabajo con Drivers
+
+El proceso de desarrollo cambia ligeramente. Ahora, en lugar de manipular bits, seguirás un patrón de uso de la API:
+
+1.  **Incluir el Header:** Añade el archivo de cabecera del driver que necesitas (ej. `#include "lpc17xx_gpio.h"`).
+2.  **Configurar Estructuras (si es necesario):** Muchos drivers usan estructuras para agrupar toda la configuración de un periférico. Llenas la estructura con los valores deseados.
+3.  **Llamar a la Función de Inicialización:** Pasas la estructura a una función `_Init()` (ej. `PINSEL_ConfigPin(&pin_config)`).
+4.  **Usar Funciones de Operación:** Utilizas funciones de alto nivel para controlar el periférico (ej. `GPIO_SetValue()`, `ADC_GetData()`).
+
+### 3. Guía Práctica: De Registros a Drivers
+
+Veamos cómo se transforman las tareas que ya conoces.
+
+#### Ejemplo 1: Configurar un Pin GPIO (LED en P0.22)
+
+**El Modo Antiguo (Registros):**
+```c
+// Paso 1: Configurar P0.22 como GPIO (función 00 en PINSEL1[13:12])
+LPC_PINCON->PINSEL1 &= ~(3 << 12);
+
+// Paso 2: Configurar P0.22 como salida (bit 22 en FIODIR0)
+LPC_GPIO0->FIODIR |= (1 << 22);
+
+// Operación: Encender el LED
+LPC_GPIO0->FIOSET = (1 << 22);
+```
+
+**El Nuevo Modo (Drivers CMSIS):**
+```c
+#include "lpc17xx_pinsel.h"
+#include "lpc17xx_gpio.h"
+
+// Paso 1: Configurar el pin usando una estructura y una función
+PINSEL_CFG_Type pin_config;
+
+pin_config.Portnum   = PINSEL_PORT_0;
+pin_config.Pinnum    = PINSEL_PIN_22;
+pin_config.Funcnum   = PINSEL_FUNC_0; // 0 para GPIO
+pin_config.Pinmode   = PINSEL_PINMODE_PULLUP; // Opcional
+pin_config.OpenDrain = PINSEL_PINMODE_NORMAL; // Opcional
+
+PINSEL_ConfigPin(&pin_config);
+
+// Paso 2: Configurar la dirección
+GPIO_SetDir(0, (1 << 22), 1); // Puerto 0, Pin 22, Dirección 1 (Salida)
+
+// Operación: Encender el LED
+GPIO_SetValue(0, (1 << 22));
+```**Análisis:** El nuevo código es más largo, pero es auto-documentado. `PINSEL_FUNC_0` es mucho más claro que `~(3 << 12)`. `GPIO_SetDir` con el parámetro `1` es explícito sobre que es una salida.
+
+---
+
+#### Ejemplo 2: Usar el SysTick para un Delay
+
+Aquí vemos el poder de **CMSIS-Core**.
+
+**El Modo Antiguo (Registros):**```c
+void delay_ms_systick(uint32_t milisegundos) {
+    uint32_t ticks = (SystemCoreClock / 1000) * milisegundos;
+    SysTick->LOAD = ticks - 1;
+    SysTick->VAL = 0;
+    SysTick->CTRL = (1 << 2) | (1 << 0);
+    while (!(SysTick->CTRL & (1 << 16)));
+    SysTick->CTRL = 0;
+}
+```
+
+**El Nuevo Modo (CMSIS-Core):**
+```c
+// Esta función ya viene definida en los archivos de CMSIS-Core!
+#include "LPC17xx.h" // SystemCoreClock y SysTick_Config están aquí
+
+void delay_ms_systick(uint32_t milisegundos) {
+    // Configura Y HABILITA el SysTick para que interrumpa cada 1ms
+    // Esta función hace los 3 pasos: LOAD, VAL y CTRL.
+    SysTick_Config(SystemCoreClock / 1000);
+
+    // Bucle de espera
+    // (Este ejemplo es un poco más complejo, pero la inicialización es la clave)
+    // Para un delay simple, la lógica de interrupción es más común con CMSIS.
+    // Lo más importante: ¡La inicialización se reduce a UNA línea!
+}
+
+// El uso más común con CMSIS es el basado en interrupciones:
+volatile uint32_t ms_ticks = 0;
+void SysTick_Handler(void) {
+    ms_ticks++;
+}
+
+int main(void) {
+    // Configura el SysTick para que interrumpa cada 1ms
+    SysTick_Config(SystemCoreClock / 1000); 
+
+    while(1) { /* ... */ }
+}
+```
+**Análisis:** La función `SysTick_Config()` encapsula toda la configuración del SysTick para interrupciones periódicas. Simplifica enormemente el inicio, haciendo el código más limpio y menos propenso a errores de configuración.
+
+---
+
+#### Ejemplo 3: Leer el ADC
+
+Aquí es donde los drivers realmente brillan, al manejar periféricos más complejos.
+
+**El Modo Antiguo (Registros):**
+```c
+// Inicialización...
+LPC_SC->PCONP |= (1 << 12);
+LPC_PINCON->PINSEL1 |= (1 << 14); // ... etc para PINSEL y PINMODE
+LPC_ADC->AD0CR = (1 << 21) | (1 << 8);
+
+// Lectura...
+LPC_ADC->AD0CR |= (1 << 0) | (1 << 24); // Seleccionar canal 0 e iniciar
+while (!(LPC_ADC->AD0GDR & (1U << 31))); // Esperar bandera DONE
+uint16_t valor = (LPC_ADC->AD0GDR >> 4) & 0xFFF; // Extraer resultado
+```
+
+**El Nuevo Modo (Drivers CMSIS):**
+```c
+#include "lpc17xx_adc.h"
+#include "lpc17xx_pinsel.h"
+
+// Inicialización...
+// (Configurar el pin P0.23 con PINSEL_ConfigPin como antes, función 1)
+ADC_Init(LPC_ADC, 200000); // Inicializa el ADC con una tasa de muestreo de 200KHz
+ADC_IntConfig(LPC_ADC, ADC_ADINTEN0, DISABLE); // Deshabilitar interrupciones
+ADC_ChannelCmd(LPC_ADC, ADC_CHANNEL_0, ENABLE); // Habilitar el canal 0
+
+// Lectura...
+ADC_StartCmd(LPC_ADC, ADC_START_NOW); // Iniciar conversión
+
+// Esperar a que la conversión del canal 0 termine
+while (ADC_ChannelGetStatus(LPC_ADC, ADC_CHANNEL_0, ADC_DATA_DONE) == RESET);
+
+uint16_t valor = ADC_ChannelGetData(LPC_ADC, ADC_CHANNEL_0);
+```
+**Análisis:** ¡La diferencia es abismal!
+-   `ADC_Init` se encarga de `PCONP` y `ADCR`.
+-   Las funciones `_Cmd` son claras para iniciar o habilitar partes del periférico.
+-   `ADC_ChannelGetStatus` es una forma explícita de comprobar la bandera `DONE`.
+-   `ADC_ChannelGetData` **hace el trabajo sucio por ti**: lee el registro, extrae el valor de 12 bits y te lo devuelve limpio. Ya no tienes que hacer desplazamientos ni aplicar máscaras.
+
+---
+
+## Guía de Programación con Drivers CMSIS para LPC1769
+
+El cambio de manipular registros directamente a usar los drivers es un salto hacia un código más robusto, legible y mantenible. A continuación, se detalla cómo configurar y usar los periféricos esenciales con esta nueva metodología.
+
+### 1. Gestión de Clocks: El Corazón del Sistema
+
+Antes de inicializar cualquier periférico, debemos asegurarnos de que el sistema y los periféricos mismos estén funcionando a la velocidad de reloj que esperamos.
+
+#### El Modo Antiguo (Registros)
+
+Configurar el PLL0, los divisores CCLK y PCLK implicaba una secuencia compleja de escrituras en registros como `LPC_SC->CLKSRCSEL`, `LPC_SC->PLL0CFG`, `LPC_SC->CCLKCFG`, y `LPC_SC->PCLKSELx`. Era fácil cometer un error.
+
+#### El Nuevo Modo (Drivers CMSIS)
+
+El sistema de drivers simplifica esto enormemente.
+
+1.  **`SystemInit()`**: Esta función es tu punto de partida. Se llama automáticamente al inicio de tu programa (antes de `main()`) desde el archivo `startup_LPC17xx.s`. Su propósito es configurar el microcontrolador a un estado operativo por defecto, incluyendo la configuración del reloj principal (CCLK) a una velocidad predeterminada (usualmente 100 MHz usando el PLL0).
+2.  **`SystemCoreClockUpdate()`**: Después de `SystemInit()` o de cualquier cambio en la configuración del reloj, debes llamar a esta función. Lee los registros de configuración del reloj y actualiza la variable global `SystemCoreClock`, que es crucial para que otros drivers (como el SysTick) calculen los retardos correctamente.
+3.  **`CLKPWR_SetPCLKDiv(peripheral, divisor)`**: Esta es la función clave para controlar la velocidad de cada periférico individualmente.
+    -   `peripheral`: Una macro que identifica al periférico (ej. `CLKPWR_PCLKSEL_ADC`).
+    -   `divisor`: El factor por el cual se dividirá el CCLK (`CLKPWR_PCLKDIV_1`, `_2`, `_4`, `_8`).
+
+**Código de Ejemplo: Configuración de Clocks**
+```c
+#include "lpc17xx_clkpwr.h"
+
+int main(void) {
+    // 1. SystemInit() ya fue llamado automáticamente. 
+    //    El CCLK está probablemente a 100 MHz.
+    SystemCoreClockUpdate(); // Actualiza la variable global SystemCoreClock
+
+    // Por defecto, muchos periféricos corren a CCLK/4.
+    // Vamos a configurar el reloj del ADC para que corra a CCLK/8.
+    // Si CCLK = 100MHz, PCLK_ADC será 12.5 MHz.
+    CLKPWR_SetPCLKDiv(CLKPWR_PCLKSEL_ADC, CLKPWR_PCLKDIV_8);
+
+    // ... inicializar el resto de los periféricos ...
+
+    while(1) { /* ... */ }
+}
+```
+**Análisis:** En lugar de manipular múltiples registros con valores crípticos, ahora usamos funciones con nombres descriptivos y macros. `CLKPWR_PCLKDIV_8` es mucho más claro que escribir `0b11` en una posición de bit específica.
+
+---
+
+### 2. Configuración de Pines (PINSEL / GPIO)
+
+#### El Modo Antiguo (Registros)
+```c
+LPC_PINCON->PINSEL1 &= ~(3 << 12); // P0.22 como GPIO
+LPC_GPIO0->FIODIR |= (1 << 22);   // P0.22 como Salida
+LPC_GPIO0->FIOSET = (1 << 22);    // Poner en ALTO
+```
+
+#### El Nuevo Modo (Drivers CMSIS)
+```c
+#include "lpc17xx_pinsel.h"
+#include "lpc17xx_gpio.h"
+
+// 1. Configurar la función del pin
+PINSEL_CFG_Type PinCfg;
+PinCfg.Portnum = PINSEL_PORT_0;
+PinCfg.Pinnum  = PINSEL_PIN_22;
+PinCfg.Funcnum = PINSEL_FUNC_0; // 0 para GPIO
+PinCfg.Pinmode = PINSEL_PINMODE_TRISTATE; // Sin pull-up/down
+
+PINSEL_ConfigPin(&PinCfg);
+
+// 2. Configurar la dirección del pin
+GPIO_SetDir(0, (1 << 22), 1); // Puerto 0, máscara para Pin 22, Dirección 1 (Salida)
+
+// 3. Operar el pin
+GPIO_SetValue(0, (1 << 22));   // Poner en ALTO
+// GPIO_ClearValue(0, (1 << 22)); // Poner en BAJO
+```
+**Análisis:** La estructura `PINSEL_CFG_Type` agrupa toda la configuración de un pin en un solo lugar, haciendo el código más ordenado. Las funciones `GPIO_SetDir`, `GPIO_SetValue` y `GPIO_ClearValue` son explícitas sobre su propósito.
+
+---
+
+### 3. Timer SysTick
+
+#### El Modo Antiguo (Registros)
+```c
+SysTick->LOAD = (SystemCoreClock / 1000) - 1;
+SysTick->VAL = 0;
+SysTick->CTRL = (1 << 2) | (1 << 1) | (1 << 0);
+// ... y definir SysTick_Handler()
+```
+
+#### El Nuevo Modo (CMSIS-Core)
+El SysTick es parte del núcleo Cortex-M, por lo que su control está estandarizado en CMSIS-Core.
+
+```c
+#include "LPC17xx.h" // Incluye todo lo necesario para CMSIS-Core
+
+volatile uint32_t ms_ticks = 0;
+
+void SysTick_Handler(void) {
+    ms_ticks++;
+}
+
+int main(void) {
+    SystemCoreClockUpdate();
+
+    // Configura Y HABILITA el SysTick para que interrumpa cada 1ms.
+    // Esta función hace todo el trabajo de LOAD, VAL y CTRL por ti.
+    if (SysTick_Config(SystemCoreClock / 1000)) {
+        // Hubo un error en la configuración
+        while (1);
+    }
+
+    while(1) {
+        if (ms_ticks > 1000) {
+            // Ha pasado 1 segundo...
+            ms_ticks = 0;
+        }
+    }
+}
+```
+**Análisis:** La función `SysTick_Config()` es la joya de la corona. Reduce una configuración de 3 registros propensa a errores a una sola llamada de función segura (incluso devuelve un error si el valor de recarga es inválido).
+
+---
+
+### 4. Convertidor Analógico-Digital (ADC)
+
+#### El Modo Antiguo (Registros)
+Una secuencia compleja de escrituras en `PCONP`, `PINSEL`, `AD0CR` y `AD0GDR`, incluyendo desplazamientos de bits y máscaras para leer el resultado.
+
+#### El Nuevo Modo (Drivers CMSIS)
+```c
+#include "lpc17xx_adc.h"
+#include "lpc17xx_pinsel.h"
+
+void ADC_Configuration(void) {
+    // Configurar P0.23 (AD0.0) con PINSEL_ConfigPin, Funcnum = 1
+
+    // Inicializar el ADC. El driver se encarga de PCONP y la configuración base.
+    // 200000 Hz es la tasa de muestreo máxima recomendada.
+    ADC_Init(LPC_ADC, 200000);
+
+    // Habilitar el canal 0 para la conversión
+    ADC_ChannelCmd(LPC_ADC, ADC_CHANNEL_0, ENABLE);
+}
+
+uint16_t ADC_ReadValue(void) {
+    // Iniciar la conversión ahora, en modo software
+    ADC_StartCmd(LPC_ADC, ADC_START_NOW);
+
+    // Esperar hasta que la conversión en el canal 0 termine
+    while (ADC_ChannelGetStatus(LPC_ADC, ADC_CHANNEL_0, ADC_DATA_DONE) == RESET);
+
+    // Leer el dato. La función se encarga de extraer y devolver el valor limpio.
+    return ADC_ChannelGetData(LPC_ADC, ADC_CHANNEL_0);
+}
+```
+**Análisis:** El driver abstrae toda la complejidad. Ya no necesitas recordar en qué bits está el resultado (`15:4`) ni la bandera `DONE` (bit 31). Funciones como `ADC_ChannelGetData` hacen el código mucho más limpio y seguro.
+
+---
+
+### 5. Convertidor Digital-Analógico (DAC)
+
+#### El Modo Antiguo (Registros)
+```c
+// Configurar P0.26 para la función 2 (10)
+LPC_PINCON->PINSEL1 &= ~(3 << 20);
+LPC_PINCON->PINSEL1 |= (2 << 20);
+// Escribir valor, recordando el desplazamiento de 6 bits
+LPC_DAC->DACR = (valor_10_bits << 6);
+```
+
+#### El Nuevo Modo (Drivers CMSIS)
+```c
+#include "lpc17xx_dac.h"
+#include "lpc17xx_pinsel.h"
+
+void DAC_Configuration(void) {
+    // Configurar P0.26 con PINSEL_ConfigPin, Funcnum = 2
+
+    // Inicializar el DAC
+    DAC_Init(LPC_DAC);
+}
+
+void DAC_SetValue(uint16_t valor) {
+    // Actualizar el valor de salida. 
+    // La función se encarga del desplazamiento de 6 bits por ti.
+    DAC_UpdateValue(LPC_DAC, valor);
+}
+```
+**Análisis:** El driver del DAC es simple pero muy útil. `DAC_UpdateValue` elimina la necesidad de recordar el desplazamiento de 6 bits, una fuente común de errores.
+
+---
+
+### 6. Acceso Directo a Memoria (DMA)
+
+#### El Modo Antiguo (Registros)
+Configuración muy detallada y propensa a errores de `PCONP`, `DMACConfig`, y los múltiples registros de cada canal (`DMACCSrcAddr`, `DMACCDestAddr`, `DMACCControl`, `DMACCConfig`).
+
+#### El Nuevo Modo (Drivers CMSIS)
+El driver del DMA es uno de los que más simplifica el proceso, usando una estructura para configurar cada canal.
+
+```c
+#include "lpc17xx_gpdma.h"
+
+// Ejemplo: Transferir un array de memoria a un UART usando DMA
+uint8_t mensaje_uart[] = "Hola DMA!";
+
+void DMA_Configuration(void) {
+    GPDMA_Channel_CFG_Type GPDMACfg;
+
+    // Inicializar el GPDMA (habilita PCONP y el controlador)
+    GPDMA_Init();
+
+    // Configurar el Canal 0 del DMA
+    GPDMACfg.ChannelNum = 0;
+    // Origen: Memoria
+    GPDMACfg.SrcMemAddr = (uint32_t)mensaje_uart;
+    // Destino: Periférico UART0 Tx (ID = 2)
+    GPDMACfg.DstConn = GPDMA_CONN_UART0_Tx;
+    // Tamaño de la transferencia
+    GPDMACfg.TransferSize = sizeof(mensaje_uart);
+    // Ancho: Byte
+    GPDMACfg.TransferWidth = GPDMA_WIDTH_BYTE;
+    // Tipo: Memoria a Periférico
+    GPDMACfg.TransferType = GPDMA_TRANSFERTYPE_M2P;
+    // No encadenar transferencias
+    GPDMACfg.DMALI = 0;
+
+    // Aplicar la configuración al canal 0
+    GPDMA_Setup(&GPDMACfg);
+}
+
+int main(void) {
+    // ... inicializar UART ...
+    DMA_Configuration();
+    
+    // Habilitar el canal 0 para que comience la transferencia cuando el UART lo pida
+    GPDMA_ChannelCmd(0, ENABLE);
+
+    while(1) { /* La transferencia ocurre en segundo plano */ }
+}
+```
+**Análisis:** La estructura `GPDMA_Channel_CFG_Type` es la clave. Organiza toda la configuración del canal de una manera lógica y legible. Las macros como `GPDMA_CONN_UART0_Tx` y `GPDMA_TRANSFERTYPE_M2P` eliminan la necesidad de buscar "números mágicos" en el manual. El flujo "Configurar -> Setup -> Habilitar" es claro y consistente.
+
+---
+
+### 7. Manejo de Interrupciones de Periféricos con Drivers CMSIS
+
+Hasta ahora, hemos usado el "polling" (sondeo) para esperar a que un periférico termine una tarea (ej. `while (flag == 0);`). Este método es simple, pero **muy ineficiente**, ya que la CPU se queda atrapada en un bucle sin hacer nada útil.
+
+Las **interrupciones** resuelven este problema. Son un mecanismo de hardware que permite a un periférico "avisar" a la CPU cuando un evento ha ocurrido (ej. "¡Terminé la conversión ADC!" o "¡Han presionado un botón!"). La CPU detiene momentáneamente su tarea principal, atiende la solicitud del periférico en una función especial llamada **Handler**, y luego regresa a su trabajo exactamente donde lo dejó.
+
+#### El Flujo de Trabajo para Configurar una Interrupción
+
+Usando los drivers CMSIS, el proceso es estándar y consistente para casi todos los periféricos:
+
+1.  **Paso 1: Configurar el Periférico:** Inicializa el periférico como lo harías normalmente (ej. `ADC_Init()`, `GPIO_SetDir()`).
+2.  **Paso 2: Configurar la Lógica de Interrupción del Periférico:** Dile al periférico bajo qué condiciones debe generar una señal de interrupción (ej. al detectar un flanco de bajada en un pin, al terminar una conversión, etc.).
+3.  **Paso 3: Habilitar la Interrupción en el NVIC:** El NVIC (Nested Vectored Interrupt Controller) es el "centro de control de eventos" de la CPU. Debes decirle explícitamente que "escuche" las señales provenientes del periférico que has configurado.
+4.  **Paso 4: Escribir la Rutina de Servicio de Interrupción (ISR / Handler):** Crea la función `NombrePeriferico_IRQHandler()` que se ejecutará automáticamente cuando ocurra la interrupción. Dentro de esta función, es crucial:
+    a. Identificar la fuente de la interrupción (si es necesario).
+    b. Realizar la tarea requerida (leer datos, establecer una bandera, etc.).
+    c. **Limpiar la bandera de interrupción del periférico.** Si no lo haces, el periférico seguirá interrumpiendo y el programa se quedará atascado en el handler.
+
+---
+
+#### Ejemplo Práctico: Interrupción Externa (EINT) por Pulsador
+
+Este es el ejemplo clásico: un programa que enciende un LED, pero solo después de que se presione un botón. La detección del botón se hará por interrupción, dejando el bucle `main()` libre. Usaremos el pin **P2.10**, que corresponde a la interrupción externa **EINT0**.
+
+**El Modo Antiguo (Registros):**
+```c
+// Configurar P2.10 como entrada EINT0 (Función 1)
+LPC_PINCON->PINSEL4 |= (1 << 20); 
+LPC_PINCON->PINSEL4 &= ~(1 << 21);
+// Configurar para interrupción por flanco
+LPC_SC->EXTMODE |= (1 << 0); 
+// Configurar para flanco de bajada
+LPC_SC->EXTPOLAR &= ~(1 << 0); 
+// Habilitar la interrupción EINT0 en el NVIC (bit 18)
+LPC_NVIC->ISER[0] |= (1 << 18);
+
+// En el Handler...
+void EINT0_IRQHandler(void) {
+    // Limpiar la bandera escribiendo un 1
+    LPC_SC->EXTINT |= (1 << 0);
+    // ...hacer algo...
+}
+```
+**Análisis del Modo Antiguo:** Es fácil olvidar un paso, como habilitar la interrupción en el NVIC. Además, ¿quién recuerda que EINT0 es el bit 18 del registro `ISER[0]`? Es muy propenso a errores.
+
+---
+
+**El Nuevo Modo (Drivers CMSIS):**
+```c
+#include "lpc17xx_exti.h"
+#include "lpc17xx_gpio.h"
+#include "lpc17xx_pinsel.h"
+
+// Usamos 'volatile' para que el compilador no optimice esta variable,
+// ya que es modificada en una interrupción y leída en el bucle principal.
+volatile bool button_pressed = false;
+
+/**
+ * @brief Handler para la interrupción externa EINT0 (pin P2.10)
+ */
+void EINT0_IRQHandler(void) {
+    // PASO 4c: Limpiar la bandera de interrupción. ¡Siempre primero!
+    EXTI_ClearIntPending(EXTI_EINT0);
+
+    // PASO 4b: Realizar la tarea
+    button_pressed = true;
+}
+
+int main(void) {
+    // ... inicializar LED en P0.22 ...
+    
+    // PASO 1: Configurar el pin P2.10 para la función EINT0
+    PINSEL_CFG_Type PinCfg;
+    PinCfg.Portnum = PINSEL_PORT_2;
+    PinCfg.Pinnum  = PINSEL_PIN_10;
+    PinCfg.Funcnum = PINSEL_FUNC_1; // Función 1 para EINT0
+    PinCfg.Pinmode = PINSEL_PINMODE_PULLUP; // Usar pull-up interno
+    PINSEL_ConfigPin(&PinCfg);
+
+    // PASO 2: Configurar la lógica de la interrupción externa
+    EXTI_Init(); // Inicializa el periférico EXTI
+    EXTI_SetEdge(EXTI_EINT0, EXTI_EDGE_FALLING); // Configurar para flanco de bajada
+
+    // PASO 3: Habilitar la interrupción en el NVIC
+    NVIC_EnableIRQ(EINT0_IRQn);
+
+    while(1) {
+        // El bucle principal está libre para otras tareas.
+        // Aquí solo comprobamos la bandera que la interrupción activa.
+        if (button_pressed) {
+            // La interrupción ocurrió.
+            // Invertir el estado del LED
+            uint32_t led_state = GPIO_ReadValue(0);
+            if (led_state & (1 << 22)) {
+                GPIO_ClearValue(0, (1 << 22));
+            } else {
+                GPIO_SetValue(0, (1 << 22));
+            }
+            
+            // Reiniciar la bandera para esperar la próxima pulsación
+            button_pressed = false;
+        }
+        
+        // ... aquí podría ir otro código que se ejecuta continuamente ...
+    }
+}
+```
+
+**Análisis del Nuevo Modo:**
+
+*   **Claridad:** Funciones como `EXTI_SetEdge(EXTI_EINT0, EXTI_EDGE_FALLING)` son auto-documentadas. Sabes exactamente lo que estás configurando sin consultar el manual.
+*   **Abstracción del NVIC:** `NVIC_EnableIRQ(EINT0_IRQn)` es una función estándar de **CMSIS-Core**. Funciona para cualquier interrupción. No necesitas saber el número de IRQ (18) ni en qué registro del NVIC (`ISER[0]`) se encuentra. La macro `EINT0_IRQn` se encarga de eso.
+*   **Seguridad:** El driver proporciona la función `EXTI_ClearIntPending()` para limpiar la bandera. Es mucho menos propenso a errores que recordar el registro y el bit correctos.
+*   **Eficiencia:** El bucle `main()` ya no está bloqueado esperando un evento. El programa es ahora **dirigido por eventos**, lo que lo hace mucho más potente y eficiente.
