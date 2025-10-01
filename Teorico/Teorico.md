@@ -1837,14 +1837,14 @@ int main(void) {
 
 Hasta ahora, hemos usado el "polling" (sondeo) para esperar a que un periférico termine una tarea (ej. `while (flag == 0);`). Este método es simple, pero **muy ineficiente**, ya que la CPU se queda atrapada en un bucle sin hacer nada útil.
 
-Las **interrupciones** resuelven este problema. Son un mecanismo de hardware que permite a un periférico "avisar" a la CPU cuando un evento ha ocurrido (ej. "¡Terminé la conversión ADC!" o "¡Han presionado un botón!"). La CPU detiene momentáneamente su tarea principal, atiende la solicitud del periférico en una función especial llamada **Handler**, y luego regresa a su trabajo exactamente donde lo dejó.
+Las **interrupciones** resuelven este problema. Son un mecanismo de hardware que permite a un periférico "avisar" a la CPU cuando un evento ha ocurrido. La CPU detiene momentáneamente su tarea principal, atiende la solicitud del periférico en una función especial llamada **Handler**, y luego regresa a su trabajo exactamente donde lo dejó.
 
 #### El Flujo de Trabajo para Configurar una Interrupción
 
 Usando los drivers CMSIS, el proceso es estándar y consistente para casi todos los periféricos:
 
 1.  **Paso 1: Configurar el Periférico:** Inicializa el periférico como lo harías normalmente (ej. `ADC_Init()`, `GPIO_SetDir()`).
-2.  **Paso 2: Configurar la Lógica de Interrupción del Periférico:** Dile al periférico bajo qué condiciones debe generar una señal de interrupción (ej. al detectar un flanco de bajada en un pin, al terminar una conversión, etc.).
+2.  **Paso 2: Configurar la Lógica de Interrupción del Periférico:** Dile al periférico bajo qué condiciones debe generar una señal de interrupción.
 3.  **Paso 3: Habilitar la Interrupción en el NVIC:** El NVIC (Nested Vectored Interrupt Controller) es el "centro de control de eventos" de la CPU. Debes decirle explícitamente que "escuche" las señales provenientes del periférico que has configurado.
 4.  **Paso 4: Escribir la Rutina de Servicio de Interrupción (ISR / Handler):** Crea la función `NombrePeriferico_IRQHandler()` que se ejecutará automáticamente cuando ocurra la interrupción. Dentro de esta función, es crucial:
     a. Identificar la fuente de la interrupción (si es necesario).
@@ -1947,3 +1947,314 @@ int main(void) {
 *   **Abstracción del NVIC:** `NVIC_EnableIRQ(EINT0_IRQn)` es una función estándar de **CMSIS-Core**. Funciona para cualquier interrupción. No necesitas saber el número de IRQ (18) ni en qué registro del NVIC (`ISER[0]`) se encuentra. La macro `EINT0_IRQn` se encarga de eso.
 *   **Seguridad:** El driver proporciona la función `EXTI_ClearIntPending()` para limpiar la bandera. Es mucho menos propenso a errores que recordar el registro y el bit correctos.
 *   **Eficiencia:** El bucle `main()` ya no está bloqueado esperando un evento. El programa es ahora **dirigido por eventos**, lo que lo hace mucho más potente y eficiente.
+
+
+---
+
+### El Periférico de Comunicación Serie (UART)
+
+El **UART (Universal Asynchronous Receiver/Transmitter)** es el periférico más común para la comunicación serie asíncrona, vital para enviar datos a la PC (ej. terminal serial) o a otros dispositivos.
+
+#### 1. Conceptos Clave
+
+| Concepto | Descripción |
+| :--- | :--- |
+| **Baud Rate** | La velocidad de transmisión en bits por segundo (bps). (Ej: 9600, 115200). Es la frecuencia con la que se envían los bits. |
+| **Frame** | El "paquete" de datos de la comunicación: 1 Bit de Inicio (Start), 5-8 Bits de Datos, 1 Bit de Paridad (Opcional), 1-2 Bits de Parada (Stop). |
+| **FIFO** | **First-In, First-Out.** El UART del LPC1769 tiene buffers (colas) de hardware para 16 bytes. Esto permite al CPU enviar o recibir bloques de datos sin tener que atender bit a bit. |
+| **Registros Divisores** | Se usan para dividir el reloj del periférico (`PCLK`) para generar el *Baud Rate* deseado. |
+
+#### 2. Registros Importantes (A Nivel de Control)
+
+| Registro | Propósito |
+| :--- | :--- |
+| `LPC_UARTx->LCR` | **Line Control Register.** Configura el formato del *Frame*: longitud de palabra (5-8 bits), paridad, bits de parada. |
+| `LPC_UARTx->FCR` | **FIFO Control Register.** Habilita el uso del FIFO y los *reset* de las colas. |
+| `LPC_UARTx->LSR` | **Line Status Register.** Muestra el estado actual, crucial para el *polling* (ej. `THRE` - Transmit Holding Register Empty, si está listo para enviar). |
+| `LPC_UARTx->RBR` | **Receive Buffer Register.** ¡Registro de **lectura**! Contiene el byte recibido más reciente. |
+| `LPC_UARTx->THR` | **Transmit Holding Register.** ¡Registro de **escritura**! Se escribe el byte que se quiere transmitir. |
+
+#### 3. Flujo de Programación con Drivers CMSIS
+
+El driver de UART es indispensable ya que el cálculo del *Baud Rate* es complejo.
+
+##### **Función `UART_Init()` (Configuración)**
+
+```c
+// [Configuración del Clock PCLK del UART, usando CLKPWR_SetPCLKDiv()]
+
+// 1. Configurar los pines P0.2 y P0.3 para UART0
+//    Usar PINSEL_ConfigPin con Funcnum = 1 para P0.2 (Tx) y P0.3 (Rx).
+
+// 2. Definir la configuración de la UART
+UART_CFG_Type uart_config;
+uart_config.Baud_rate = 115200; // Velocidad de comunicacion
+uart_config.Databits = UART_DATABIT_8; // 8 bits de datos
+uart_config.Parity = UART_PARITY_NONE; // Sin paridad
+uart_config.Stopbits = UART_STOPBIT_1; // 1 bit de parada
+
+// 3. Inicializar la UART (el driver calcula y configura LCR/FCR/DLL/DLM)
+UART_Init(LPC_UART0, &uart_config);
+
+// 4. Habilitar la transmisión y recepción
+UART_Cmd(LPC_UART0, ENABLE);
+```
+
+##### **Función `UART_Send()` (Transmisión)**
+
+Se usa *polling* para asegurar que el registro de transmisión esté libre antes de enviar el siguiente byte.
+
+```c
+/**
+ * @brief Envía datos usando Polling (bloqueante).
+ */
+void UART_Send(uint8_t *tx_data, uint32_t len) {
+    // La función del driver se encarga de:
+    // 1. Monitorear el bit THRE en el registro LSR (Line Status Register).
+    // 2. Escribir el byte en el registro THR.
+    UART_Send(LPC_UART0, tx_data, len, BLOCKING);
+}
+```
+
+##### **Función `UART_Receive()` (Recepción)**
+
+Se usa *polling* para esperar que un dato llegue al buffer.
+
+```c
+/**
+ * @brief Lee datos usando Polling (bloqueante).
+ */
+uint32_t UART_Receive(uint8_t *rx_data, uint32_t len) {
+    // La función del driver se encarga de:
+    // 1. Monitorear el bit DR (Data Ready) en el registro LSR.
+    // 2. Leer el byte del registro RBR.
+    return UART_Receive(LPC_UART0, rx_data, len, BLOCKING);
+}
+```
+
+---
+
+### Comunicación Serial Síncrona (SPI y I2C)
+
+Para comunicaciones más avanzadas entre chips, se utilizan interfaces síncronas que usan una señal de reloj compartida.
+
+#### El Periférico SSP/SPI (Serial Synchronous Port)
+
+*   **Conceptos Clave:** **Maestro/Esclavo**, **Reloj (SCK)**, Líneas de Datos (**MOSI/MISO**), Chip Select (**CS**). Es ideal para alta velocidad.
+*   **Flujo con CMSIS:** Se configura el *Baud Rate* y el modo (Maestro o Esclavo) usando `SSP_Init()`. La transferencia se realiza con `SSP_SendData()` y `SSP_ReceiveData()`, a menudo utilizando DMA para enviar grandes bloques de datos de forma muy eficiente.
+
+#### El Periférico I2C (Inter-Integrated Circuit)
+
+*   **Conceptos Clave:** **Maestro/Esclavo**, **Solo dos líneas** (SDA: Datos, SCL: Reloj), **Direccionamiento** de dispositivos. Es ideal para conectar múltiples chips en un mismo bus (ej. sensores, EEPROMs).
+*   **Flujo con CMSIS:** La comunicación es compleja (Estados de START, STOP, ACK/NACK). El driver simplifica esto con funciones de alto nivel como `I2C_MasterTransferData()`, que se encargan de gestionar toda la secuencia de estados.
+
+---
+
+### Integración con DMA 
+
+Un punto clave es cómo la comunicación se beneficia del DMA:
+
+*   **Transferencia UART Tx con DMA:** La CPU configura el Canal DMA con el array a enviar y el registro `THR` del UART como destino. El DMA envía todos los bytes al UART sin que la CPU tenga que esperar la bandera `THRE` byte por byte.
+*   **Transferencia ADC/UART con DMA:** El DMA puede configurarse para mover automáticamente un resultado de la conversión ADC a un buffer de memoria, y luego otro canal DMA puede mover ese buffer al UART para ser enviado a la PC. **¡La CPU no hace nada!**
+
+---
+
+## Apéndice: Glosario de Drivers API (LPC1769)
+
+Esta sección resume la Interfaz de Programación de Aplicaciones (API) de los Drivers CMSIS (NXP) para el LPC1769, extraída directamente de la documentación de referencia, para una consulta rápida de estructuras y funciones.
+
+### 1. Configuración de Pines (`PINSEL`)
+
+| Elemento Clave | Tipo | Descripción |
+| :--- | :--- | :--- |
+| `PINSEL_PORT_OPT` | `enum` | Selección del puerto: `PINSEL_PORT_0` a `PINSEL_PORT_4`. |
+| `PINSEL_PIN_OPT` | `enum` | Selección del pin: `PINSEL_PIN_0` a `PINSEL_PIN_31`. |
+| `PINSEL_FUNC_OPT` | `enum` | Selección de la función: `PINSEL_FUNC_0` (GPIO) a `PINSEL_FUNC_3`. |
+| `PINSEL_PINMODE_OPT` | `enum` | Resistencia interna: `PINSEL_PULLUP`, `PINSEL_REPEATER`, `PINSEL_TRISTATE`, `PINSEL_PULLDOWN`. |
+| `PINSEL_OD_OPT` | `enum` | Modo de salida: `PINSEL_OD_NORMAL`, `PINSEL_OD_OPENDRAIN`. |
+| `PINSEL_CFG_Type` | `struct` | Estructura de configuración: `portNum`, `pinNum`, `funcNum`, `pinMode`, `openDrain`. |
+
+**Funciones de Control:**
+
+```c
+// Configures the pin according to the parameters in pinCfg.
+void PINSEL_ConfigPin(const PINSEL_CFG_Type* pinCfg);
+
+// Configures multiple pins according to the parameters in pinCfg and the pins mask.
+void PINSEL_ConfigMultiplePins(const PINSEL_CFG_Type* pinCfg, uint32_t pins);
+```
+
+---
+
+### 2. Entrada/Salida de Propósito General (`GPIO`)
+
+| Elemento Clave | Tipo | Descripción |
+| :--- | :--- | :--- |
+| `GPIO_PORT_OPT` | `enum` | Selección del puerto GPIO (`GPIO_PORT_0` a `_4`). |
+| `GPIO_DIR_OPT` | `enum` | Dirección del pin: `GPIO_INPUT` (0) o `GPIO_OUTPUT`. |
+| `GPIO_INT_EDGE_OPT`| `enum` | Flanco de interrupción: `GPIO_INT_RISING` (0) o `GPIO_INT_FALLING`. |
+
+**Funciones de Control:**
+
+```c
+// Sets the direction for the specified GPIO port pins.
+void GPIO_SetDir(GPIO_PORT_OPT portNum, uint32_t pins, GPIO_DIR_OPT dir);
+
+// Sets the specified output pins to high on a given GPIO port.
+void GPIO_SetPins(GPIO_PORT_OPT portNum, uint32_t pins);
+
+// Clears the specified output pins to low on a given GPIO port.
+void GPIO_ClearPins(GPIO_PORT_OPT portNum, uint32_t pins);
+
+// Reads the current state of all pins on the specified GPIO port.
+uint32_t GPIO_ReadValue(GPIO_PORT_OPT portNum);
+
+// Toggles the state of specified pins on the given GPIO port.
+void GPIO_TogglePins(GPIO_PORT_OPT portNum, uint32_t pins);
+
+// Sets the interrupt enable mask for GPIO pins on the given port.
+void GPIO_IntCmd(GPIO_PORT_OPT portNum, uint32_t newValue, GPIO_INT_EDGE_OPT edgeState);
+
+// Clears the interrupt status for selected GPIO pins.
+void GPIO_ClearInt(GPIO_PORT_OPT portNum, uint32_t pins);
+```
+
+---
+
+### 3. Interrupciones Externas (`EXTI`)
+
+| Elemento Clave | Tipo | Descripción |
+| :--- | :--- | :--- |
+| `EXTI_LINE_OPT` | `enum` | Línea de interrupción: `EXTI_EINT0` (P2.10) a `EXTI_EINT3` (P2.13). |
+| `EXTI_MODE_OPT` | `enum` | Sensibilidad: `EXTI_LEVEL_SENSITIVE` o `EXTI_EDGE_SENSITIVE`. |
+| `EXTI_POLARITY_ENUM`| `enum` | Polaridad/Flanco: `EXTI_LOW_ACTIVE`, `EXTI_FALLING_EDGE`, `EXTI_HIGH_ACTIVE`, `EXTI_RISING_EDGE`. |
+| `EXTI_CFG_Type` | `struct` | Estructura de configuración: `line`, `mode`, `polarity`. |
+
+**Funciones de Control:**
+
+```c
+// Initializes the External Interrupt (EXTI) controller.
+void EXTI_Init(void);
+
+// Configures a specific External Interrupt (EXTI) line.
+void EXTI_Config(const EXTI_CFG_Type* EXTICfg);
+
+// Clears the external interrupt flag for the specified EXTI line.
+void EXTI_ClearFlag(EXTI_LINE_OPT EXTILine);
+
+// Clears the interrupt flag and enables the IRQ for the specified EXTI line.
+void EXTI_EnableIRQ(EXTI_LINE_OPT EXTILine);
+```
+
+---
+
+### 4. Timers/Contadores (`TIMERS`)
+
+| Elemento Clave | Tipo | Descripción |
+| :--- | :--- | :--- |
+| `TIM_INT_TYPE` | `enum` | Tipo de interrupción: `TIM_MRx_INT` (Match) o `TIM_CRx_INT` (Capture). |
+| `TIM_MODE_OPT` | `enum` | Modo de operación: `TIM_TIMER_MODE`, `TIM_COUNTER_RISING_MODE`, etc. |
+| `TIM_TIMERCFG_Type` | `struct` | Configuración del *Prescale*: `prescaleOption` (`TIM_TICKVAL`/`TIM_USVAL`) y `prescaleValue`. |
+| `TIM_MATCHCFG_Type` | `struct` | Configuración de la comparación (Match): `matchChannel`, `matchValue`, `intonMatch`, `stopOnMatch`, `resetOnMatch`, `extMatchOutputType`. |
+| `TIM_CAPTURECFG_Type`| `struct` | Configuración de la captura: `captureChannel`, `risingEdge`, `fallingEdge`, `intOnCapture`. |
+
+**Funciones de Control:**
+
+```c
+// Initializes the specified Timer/Counter peripheral.
+void TIM_Init(LPC_TIM_TypeDef *TIMx, TIM_MODE_OPT timerCounterMode, void *TIM_ConfigStruct);
+
+// Configures the match channel for the specified Timer/Counter peripheral.
+void TIM_ConfigMatch(LPC_TIM_TypeDef *TIMx, TIM_MATCHCFG_Type *TIM_MatchConfigStruct);
+
+// Updates the match value for the specified Timer/Counter channel.
+void TIM_UpdateMatchValue(LPC_TIM_TypeDef *TIMx, TIM_MATCH_CHANNEL_OPT matchChannel, uint32_t matchValue);
+
+// Sets the external match output type for a specific match channel.
+void TIM_SetMatchExt(LPC_TIM_TypeDef *TIMx, TIM_MATCH_CHANNEL_OPT matchChannel, TIM_EXTMATCH_OPT extMatchOutputType);
+
+// Enables or disables the specified Timer/Counter peripheral.
+void TIM_Cmd(LPC_TIM_TypeDef *TIMx, FunctionalState newState);
+
+// Clears the specified Timer/Counter interrupt pending flag.
+void TIM_ClearIntPending(LPC_TIM_TypeDef *TIMx, TIM_INT_TYPE intFlag);
+```
+
+---
+
+### 5. Convertidor Analógico-Digital (`ADC`)
+
+| Elemento Clave | Tipo | Descripción |
+| :--- | :--- | :--- |
+| `ADC_CHANNEL_SELECTION`| `enum` | Selección del canal (`ADC_CHANNEL_0` a `_7`). |
+| `ADC_START_OPT` | `enum` | Modo de inicio (`ADC_START_NOW`, `ADC_START_CONTINUOUS`, `ADC_START_ON_EINT0`, etc.). |
+| `ADC_DATA_STATUS` | `enum` | Bandera de estado: `ADC_DATA_DONE` (conversión finalizada). |
+
+**Funciones de Control:**
+
+```c
+// Initializes the ADC peripheral with the specified conversion rate.
+void ADC_Init(uint32_t rate);
+
+// Starts ADC conversion in the specified mode.
+void ADC_StartCmd(ADC_START_OPT startMode);
+
+// Enables or disables the specified ADC channel.
+void ADC_ChannelCmd(ADC_CHANNEL_SELECTION channel, FunctionalState newState);
+
+// Gets the conversion result for the specified ADC channel.
+uint16_t ADC_ChannelGetData(ADC_CHANNEL_SELECTION channel);
+
+// Gets the status flag for the specified ADC channel.
+FlagStatus ADC_ChannelGetStatus(ADC_CHANNEL_SELECTION channel, ADC_DATA_STATUS statusType);```
+
+---
+
+### 6. Convertidor Digital-Analógico (`DAC`)
+
+| Elemento Clave | Tipo | Descripción |
+| :--- | :--- | :--- |
+| `DAC_CURRENT_OPT` | `enum` | Configura el *Bias* (velocidad vs. consumo: 700uA o 350uA). |
+| `DAC_CONVERTER_CFG_Type`| `struct` | Configuración avanzada: `doubleBufferEnable`, `counterEnable`, `dmaEnable`. |
+
+**Funciones de Control:**
+
+```c
+// Initializes the DAC peripheral.
+void DAC_Init(void);
+
+// Updates the output value of the DAC.
+void DAC_UpdateValue(uint32_t newValue);
+
+// Configures the DAC converter control features.
+void DAC_ConfigDAConverterControl(DAC_CONVERTER_CFG_Type *cfgStruct);
+```
+
+---
+
+### 7. Acceso Directo a Memoria (`GPDMA`)
+
+| Elemento Clave | Tipo | Descripción |
+| :--- | :--- | :--- |
+| `GPDMA_TRANSFER_TYPE` | `enum` | Flujo de transferencia: `GPDMA_M2M`, `GPDMA_M2P`, `GPDMA_P2M`, `GPDMA_P2P`. |
+| `GPDMA_CONNECTION` | `enum` | Periférico Origen/Destino: `GPDMA_UARTO_Tx`, `GPDMA_ADC`, etc. |
+| `GPDMA_TRANSFER_WIDTH` | `enum` | Ancho de datos: `GPDMA_BYTE`, `GPDMA_HALFWORD`, `GPDMA_WORD`. |
+| `GPDMA_Channel_CFG_Type` | `struct` | Configuración completa: `transferSize`, `srcMemAddr`, `dstMemAddr`, `transferType`, `srcConn`, `dstConn`. |
+
+**Funciones de Control:**
+
+```c
+// Initializes the GPDMA controller.
+void GPDMA_Init(void);
+
+// Configures and sets up a GPDMA channel according to the provided configuration.
+Status GPDMA_Setup(const GPDMA_Channel_CFG_Type *cfg);
+
+// Enables or disables the specified GPDMA channel.
+void GPDMA_ChannelCmd(GPDMA_CHANNEL channelNum, FunctionalState NewState);
+
+// Clears the pending interrupt flag for the specified GPDMA channel.
+void GPDMA_ClearIntPending(GPDMA_CLEAR_INT type, GPDMA_CHANNEL channel);
+```
+
+---
