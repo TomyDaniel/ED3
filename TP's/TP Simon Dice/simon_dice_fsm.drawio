@@ -1,0 +1,131 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="FSM Simon Dice" id="fsm-simon-dice">
+    <mxGraphModel dx="606" dy="310" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1400" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="idle" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" value="ESTADO_IDLE" vertex="1">
+          <mxGeometry height="70" width="200" x="440" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="inicio" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;" value="ESTADO_INICIO" vertex="1">
+          <mxGeometry height="60" width="200" x="440" y="170" as="geometry" />
+        </mxCell>
+        <mxCell id="generar" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;" value="ESTADO_GENERAR_PASO" vertex="1">
+          <mxGeometry height="60" width="200" x="440" y="290" as="geometry" />
+        </mxCell>
+        <mxCell id="victoria" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" value="ESTADO_VICTORIA" vertex="1">
+          <mxGeometry height="70" width="200" x="800" y="290" as="geometry" />
+        </mxCell>
+        <mxCell id="mostrar" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;" value="ESTADO_MOSTRAR_SECUENCIA" vertex="1">
+          <mxGeometry height="70" width="200" x="440" y="410" as="geometry" />
+        </mxCell>
+        <mxCell id="esperar" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;" value="ESTADO_ESPERAR_JUGADOR" vertex="1">
+          <mxGeometry height="70" width="200" x="440" y="540" as="geometry" />
+        </mxCell>
+        <mxCell id="validar" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;" value="ESTADO_VALIDAR_JUGADA" vertex="1">
+          <mxGeometry height="70" width="200" x="440" y="670" as="geometry" />
+        </mxCell>
+        <mxCell id="gameover" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12;" value="ESTADO_GAME_OVER" vertex="1">
+          <mxGeometry height="70" width="200" x="800" y="670" as="geometry" />
+        </mxCell>
+        <mxCell id="ronda" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;" value="ESTADO_RONDA_SUPERADA" vertex="1">
+          <mxGeometry height="60" width="200" x="440" y="800" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" edge="1" parent="1" source="idle" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=11;" target="inicio" value="evento_start == 1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="inicio" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=11;" target="generar" value="automática">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="generar" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=11;" target="mostrar" value="longitud_secuencia &lt; MAX_SECUENCIA">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" edge="1" parent="1" source="generar" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=11;" target="victoria" value="longitud_secuencia &gt;= MAX_SECUENCIA">
+          <mxGeometry relative="1" x="0.25" y="40" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="740" y="320" />
+              <mxPoint x="740" y="320" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="mostrar" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=11;" target="esperar" value="fin de reproducción">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="1" source="esperar" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=11;" target="validar" value="botón detectado y soltado">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" edge="1" parent="1" source="validar" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=11;exitX=0;exitY=0.5;entryX=0;entryY=0.5;" target="esperar" value="acierto parcial">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="360" y="705" />
+              <mxPoint x="360" y="575" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="1" source="validar" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=11;" target="ronda" value="acierto total">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" edge="1" parent="1" source="validar" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=11;" target="gameover" value="error">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" edge="1" parent="1" source="ronda" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=11;exitX=1;exitY=0.5;entryX=1;entryY=0.5;" target="victoria" value="longitud_secuencia &gt;= MAX_SECUENCIA">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1080" y="830" />
+              <mxPoint x="1080" y="325" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e11" edge="1" parent="1" source="ronda" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=11;exitX=0;exitY=0.5;entryX=0;entryY=0.5;" target="generar" value="en otro caso">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="300" y="830" />
+              <mxPoint x="300" y="320" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e12" edge="1" parent="1" source="gameover" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=11;exitX=1;exitY=0.5;entryX=1;entryY=0.5;" target="idle" value="automática">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1150" y="705" />
+              <mxPoint x="1150" y="75" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="subtitle" parent="1" style="text;html=1;align=center;fontSize=12;fontStyle=1;" value="Sub-máquina dentro de ESTADO_MOSTRAR_SECUENCIA" vertex="1">
+          <mxGeometry height="20" width="360" x="740" y="410" as="geometry" />
+        </mxCell>
+        <mxCell id="sub1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" value="SUB_ENCENDER_LED" vertex="1">
+          <mxGeometry height="40" width="160" x="740" y="440" as="geometry" />
+        </mxCell>
+        <mxCell id="sub2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" value="SUB_ESPERAR_LED_ON" vertex="1">
+          <mxGeometry height="40" width="160" x="740" y="500" as="geometry" />
+        </mxCell>
+        <mxCell id="sub3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" value="SUB_APAGAR_LED" vertex="1">
+          <mxGeometry height="40" width="160" x="740" y="560" as="geometry" />
+        </mxCell>
+        <mxCell id="sub4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" value="SUB_ESPERAR_LED_OFF" vertex="1">
+          <mxGeometry height="40" width="160" x="740" y="620" as="geometry" />
+        </mxCell>
+        <mxCell id="se1" edge="1" parent="1" source="sub1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" target="sub2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="se2" edge="1" parent="1" source="sub2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" target="sub3" value="tiempo cumplido">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="se3" edge="1" parent="1" source="sub3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" target="sub4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="se4" edge="1" parent="1" source="sub4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;exitX=0;exitY=0.5;entryX=0;entryY=0.5;" target="sub1" value="tiempo cumplido &#xa;→ siguiente paso">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="700" y="640" />
+              <mxPoint x="700" y="460" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
