@@ -48,8 +48,6 @@ void config(){
 
     LPC_PINCON -> PINSEL4 &= ~(3 << 20);
     LPC_PINCON -> PINSEL4 |= (1 << 20);
-    LPC_PINCON -> PINMODE4 &= ~(3 << 20);
-    LPC_PINCON -> PINMODE4 |= (3 << 20);
     LPC_GPIO2 -> FIODIR &= ~BOTONEINT;
     LPC_SC -> EXTMODE |= (1 << 0);
     LPC_SC -> EXTPOLAR |= (1 << 0);
