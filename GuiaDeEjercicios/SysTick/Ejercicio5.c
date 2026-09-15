@@ -1,6 +1,6 @@
 #include "LPC17xx.h"
 
-#define ticks (0.1 * 100000000 - 1)
+#define ticks (0.01 * 100000000 - 1) // 10ms con 65 MHz
 
 #define LED (1 << 22)
 #define LEDs (0xF << 0)
