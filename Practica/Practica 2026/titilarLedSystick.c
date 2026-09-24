@@ -1,6 +1,6 @@
 #include "LPC17xx.h"
 
-#define ticks = 1000000
+#define ticks 1000000
 #define i
 
 void SysTick_Handler();
@@ -14,8 +14,6 @@ int main(){
     i = 100;
 
     while(1){
-
-        SysTick_Handler();
 
     }
 
