@@ -59,19 +59,19 @@ void configDMA(){
 
     GPDMA_Init();
 
-    GPDMA_Endpoint_T entrada;
+    GPDMA_Endpoint_T entrada = {0};
 
     entrada.width = 1; // Halfword
     entrada.burst = 3; // 16 bits
     entrada.increment = ENABLE;
 
-    GPDMA_Endpoint_T salida;
+    GPDMA_Endpoint_T salida = {0};
 
     salida.width = 1;
     salida.burst = 3;
     salida.increment = ENABLE;
 
-    GPDMA_Channel_CFG_T canal;
+    GPDMA_Channel_CFG_T canal = {0};
 
     canal.channelNum = 0; // Canal 0
     canal.transferSize = 64; // 64 bits de transferencia
