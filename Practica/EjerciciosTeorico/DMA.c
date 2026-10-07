@@ -83,7 +83,7 @@ void configDMA(){
     canal.src = &entrada;
     canal.dst = &salida;
     canal.intTC = DISABLE;
-    canal.intErr = ENABLE;
+    canal.intErr = ENABLE; // Habilito interrupcion
     canal.linkedList = ;
 
     GPDMA_SetupChannel(&canal);
