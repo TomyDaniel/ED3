@@ -82,9 +82,9 @@ void configDMA(){
     canal.dstConn = 0;
     canal.src = &entrada;
     canal.dst = &salida;
-    canal.intTC = DISABLE;
-    canal.intErr = ENABLE; // Habilito interrupcion
-    canal.linkedList = ;
+    canal.intTC = ENABLE; // Interrupcion de conteo
+    canal.intErr = DISABLE; // Interrupcion de error
+    canal.linkedList = 0;
 
     GPDMA_SetupChannel(&canal);
 
