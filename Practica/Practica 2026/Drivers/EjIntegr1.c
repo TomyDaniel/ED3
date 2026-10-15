@@ -6,18 +6,24 @@
 #include "lpc17xx_exti.h"
 #include "lpc17xx_systick.h"
 
-#define DIR1 0x2007E000 // Mitad del banco 0
-#define DIR2 0x20080000
+#define DIR1 0x2007C000 // Inicio del banco 0
+#define DIR2 0x2007E000 // Mitad del banco 0
+#define DIR3 0x2007E001 // Mitad del banco 0
+#define DIR4 0x20080000 // Final del banco 0
+
 #define ADC_RATE 160000
-#define ticks (0.1 * 80000000)
-#define METRICA 8192
+#define METRICA 1000
 
 static uint32_t *direccion1 = DIR1;
 static uint32_t *direccion2 = DIR2;
 
+volatile uint8_t flagDMA;
+
 void config(void);
 void configADC(void);
 void configDMA(void);
+void configTMR(void);
+void configDAC(void);
 
 void ADC_IRQHandler(void);
 void EINT0_IRQHandler(void);
@@ -25,22 +31,22 @@ void SysTick_Handler(void);
 void GPDMA_IRQHandler(void);
 
 enum estado{
-    IDLE,
-    ADC,
-    DMA
+    ADC_POINTER,
+    ADC_DMA,
+    MEM_DMA,
+    DAC_DATA,
+    DAC_WAVE
 };
 
-enum estado tipo = IDLE;
-uint16_t contador = 10; // Contador para llegar al segundo
-uint32_t idx = 0;
+enum estado tipo = ADC_POINTER;
 
 int main(){
 
     config();
     configADC();
+    configTMR();
+    configDAC();
     configDMA();
-
-    SysTick_Config(ticks); // Configuro el timer en 100 ms
 
     while(1){
 
@@ -101,8 +107,8 @@ void configDMA(){
         .channelNum = GPDMA_CH_0;
         .transferSize = 0; // Nose, lo que recolecte el ADC en 1 segundo?
         .type = GPDMA_P2M; // ADC a Mem
-        .srcMemAddr = DIR1;
-        .dstMemAddr = DIR2;
+        .srcMemAddr = 0x40034010; //ADR0
+        .dstMemAddr = DIR1;
         .srcConn = GPDMA_ADC;
         .dstConn = 0; // Memoria
         .src.width = GPDMA_HALFWORD; // Supongo que la cantidad de bits del ADC. 16?
@@ -111,59 +117,83 @@ void configDMA(){
         .dst.width = GPDMA_WORD;
         .src.burst = 0;
         .src.increment = ENABLE; // La idea es que se vaya incrementando la memoria
-        .intTC = DISABLE;
-        .intErr = ENABLE;
+        .intTC = ENABLE;
+        .intErr = DISABLE;
     }
 
     GPDMA_SetupChannel(&config);
     GPDMA_ChannelStart(GPDMA_CH_0);
 
+    GPDMA_Channel_CFG_T configM2M = {
+        .channelNum = GPDMA_CH_7;
+        .transferSize = 8192; // Cantidad de datos a transferir. Uno solo
+        .type = GPDMA_P2M; // ADC a Mem
+        .srcMemAddr = DIR1;
+        .dstMemAddr = DIR3;
+        .srcConn = 0;
+        .dstConn = 0; // Memoria
+        .src.width = GPDMA_HALFWORD; // Supongo que la cantidad de bits del ADC. 16?
+        .src.burst = 0; // No uso burst
+        .src.increment = ENABLE;
+        .dst.width = GPDMA_HALFWORD;
+        .src.burst = 0;
+        .src.increment = ENABLE; // La idea es que se vaya incrementando la memoria
+        .intTC = DISABLE;
+        .intErr = ENABLE;
+    }
+
+    GPDMA_SetupChannel(&configM2M);
+    GPDMA_ChannelStart(GPDMA_CH_7);
+
+}
+
+void configTMR(){
+
+    TIM_TIMERCFG_T conf = {
+        .prescaleOpt = TIM_US;
+        .prescaleValue = 1;
+    };
+
+    TIM_InitTimer(LPC_TIM0, &conf);
+    TIM_Enable(LPC_TIM0);
+
+    TIM_MATCHCFG_T confM = {
+        .channel = 1;
+        .intEn = DISABLE;
+        .stopEn = DISABLE;
+        .resetEn = ENABLE;
+        .extOpt = TIM_HIGH;
+        .matchValue = 14; // 1 us + 14 us = 15 us para que inicie la conversion
+    };
+
+    TIM_ConfigMatch(LPC_TIM0, &confM);
+    
 }
 
 void EINT0_IRQHandler(){
 
     switch (tipo){
-        case IDLE:
-            tipo = ADC;
+        case ADC_POINTER:
+            tipo = ADC_DMA;
             // Ya se inicializo el ADC por la configuracion previa en configADC
             break;
-        case ADC:
-            tipo = DMA
+        case ADC_DMA:
+            tipo = MEM_DMA;
             break;
         
-        default:
-            tipo = ADC
+        case DAC_DATA:
+            tipo = DAC_WAVE;
+            break;
+
+        case DAC_WAVE:
+            tipo = ADC_POINTER;
             break;
     }
-}
 
-void SysTick_Handler(){
-
-    contador--;
-
-    if(contador <= 0){
-        switch (tipo){
-            case ADC:
-                direccion1 = ADC_ChannelGetData(ADC_CHANNEL_0);
-                
-                if(idx < METRICA){
-                    idx++;
-                    &direccion1++;
-                }else{
-                    idx = 0;
-                    direccion1 = DIR1;
-                }
-
-                ADC_StartCmd(ADC_START_NOW);
-                break;
-            
-            case DMA:
-                
-                break;
-        }
-    }
 }
 
 void GPDMA_IRQHandler(){
+
+    GPDMA_ClearIntPending(GPDMA_INTTC, GPDMA_CHANNEL_0);
 
 }
