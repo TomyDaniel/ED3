@@ -21,13 +21,24 @@ Responder:
 #include "lpc17xx_timer.h"
 #include "lpc17xx_dac.h"
 
+#define BUFFER 0x20080000
+
 void configTMR(void);
-void configDMA(void);
+void configDAC(void);
+
+void TIMER0_IRQHandler(void);
+void TIMER1_IRQHandler(void);
+
+static volatile uint32_t periodo = 0;
+static volatile uint32_t subida = 0;
+static volatile uint32_t bajada = 0;
+static volatile uint8_t contador = 0;
+static volatile uint8_t ready = 0;
 
 int main(){
 
     configTMR();
-    configDMA();
+    configDAC();
 
     while(1){}
 
@@ -35,5 +46,97 @@ int main(){
 
 void configTMR(){
 
+    TIM_TIMERCFG_T conf = {
+        .prescaleOpt = TIM_US,
+        .prescaleValue = 1
+    };
+
+    TIM_InitTimer(LPC_TIM0, &conf);
+
+    TIM_CAPTURECFG_T confC = {
+        .channel = TIM_CAPTURE_0,
+        .risingEn = ENABLE,
+        .fallingEn = ENABLE,
+        .intEn = ENABLE
+    };
+
+    TIM_ConfigCapture(LPC_TIM0, &confC);
+    TIM_PinConfig(TIM_CAP0_0_P1_26);
+
+    TIM_Enable(LPC_TIM0);
+
+    TIM_TIMERCFG_T confTM = {
+        .prescaleOpt = TIM_US,
+        .prescaleValue = 100000 // 100 ms
+    };
+
+    TIM_InitTimer(LPC_TIM1, &confTM);
+
+    TIM_MATCHCFG_T confM = {
+        .channel = TIM_MATCH_0,
+        .intEn = ENABLE,
+        .stopEn = DISABLE,
+        .resetEn = ENABLE,
+        .extOpt = TIM_NOTHING,
+        .matchValue = 1
+    };
+
+    TIM_ConfigMatch(LPC_TIM1, &confM);
+
+    TIM_Enable(LPC_TIM1);
+
+    NVIC_EnableIRQ(TIMER0_IRQn);
+    NVIC_EnableIRQ(TIMER1_IRQn);
+
+}
+
+void configDAC(){
     
+    DAC_Init();
+    DAC_SetBias(DAC_350uA);
+
+}
+
+void TIMER1_IRQHandler(){
+
+    volatile uint32_t dato = 0;
+
+    for(uint8_t i=0; i<8; i++){
+        dato += *(BUFFER + i); // Extraigo el dato
+    }
+
+    dato = (dato * 620) / 100;
+
+    DAC_UpdateValue(dato);
+
+    TIM_ClearIntPending(LPC_TIM1, TIM_MR0_INT);
+
+}
+
+void TIMER0_IRQHandler(){
+
+    static volatile uint32_t dato = 0;
+    dato = TIM_GetCaptureValue(LPC_TIM0, TIM_CAPTURE_CH0);
+
+    if((GPIO_ReadValue(PORT_1) & (1 << 26))){ // Si esta en alto cargo los valores
+        periodo = dato - subida;
+        subida = dato;
+    }else{
+        bajada = dato;
+        ready = 1;
+    }
+
+    if(ready == 1){
+        *(BUFFER + contador) = ((bajada-subida)*100)/(periodo);
+        ready = 0;
+
+        if(contador <= 6){  
+            contador++;
+        }else{
+            contador = 0;
+        }
+    }
+
+    TIM_ClearIntPending(LPC_TIM0, TIM_CR0_INT);
+
 }
