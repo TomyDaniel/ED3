@@ -26,3 +26,5 @@ void config_timer_x()
 }
 
 // Con los drivers nuevos es hacer un pin config del CAP0. Es el P1.26
+// El intervalo minimo de tiempo es 1 us
+// El intervalo maximo de tiempo es 72 minutos. (2^32 - 1) * 1us
